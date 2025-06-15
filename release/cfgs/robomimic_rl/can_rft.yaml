@@ -1,5 +1,5 @@
 task_name: "PickPlaceCan"
-rl_camera: "robot0_eye_in_hand"
+rl_camera: "agentview"
 prop_stack: 3
 episode_length: 200
 stddev_max: 0.1
@@ -28,3 +28,4 @@ q_agent:
     hidden_dim: 1024
   bc_loss_coef: 0.1
   bc_loss_dynamic: 1
+save_dir: "exps/rl/run_can_state_rft"

@@ -27,6 +27,7 @@ def run_eval(
             np.random.seed(seed + episode_idx)
             with stopwatch.time("reset"):
                 obs, image_obs = env.reset()
+                assert image_obs is not None, "image obs is none"
 
             terminal = False
             while not terminal:

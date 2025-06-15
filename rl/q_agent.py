@@ -323,6 +323,7 @@ class QAgent(nn.Module):
                     self.stats["actor/anorm_rl"].append(rl_action_norm)
                     self.stats["actor/anorm_bc"].append(bc_action_norm)
                     self.stats["actor/bc_train"].append(use_bc, bsize)
+                    self.stats["actor/greedy_index"].append(greedy_action_idx.mean())
 
         return action
 

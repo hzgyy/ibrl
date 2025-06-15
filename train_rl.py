@@ -65,8 +65,9 @@ class MainConfig(common_utils.RunConfig):
     num_train_step: int = 200000
     log_per_step: int = 5000
     # log
-    save_dir: str = "exps/rl/run1"
-    use_wb: int = 0
+    save_dir: str = "exps/rl/run_can_state_rft"
+    use_wb: int = 1
+    record_dir: str = "exps/rl/run_can_state_rft"
 
     def __post_init__(self):
         self.rl_cameras = self.rl_camera.split("+")
@@ -167,6 +168,7 @@ class Workspace:
 
     def _setup_env(self):
         self.rl_cameras: list[str] = list(set(self.cfg.rl_cameras + self.cfg.bc_cameras))
+        eval_rl_cameras = self.rl_cameras
         if self.cfg.use_state:
             self.rl_cameras = []
         print(f"rl_cameras: {self.rl_cameras}")
@@ -204,8 +206,10 @@ class Workspace:
             reward_shaping=False,
             image_size=self.cfg.image_size,
             rl_image_size=self.cfg.rl_image_size,
-            camera_names=self.rl_cameras,
-            rl_cameras=self.rl_cameras,
+            # camera_names=self.rl_cameras,
+            camera_names = eval_rl_cameras,
+            # rl_cameras=self.rl_cameras,
+            rl_cameras = eval_rl_cameras,
             use_state=self.cfg.use_state,
             obs_stack=self.obs_stack,
             state_stack=self.cfg.state_stack,
@@ -251,9 +255,11 @@ class Workspace:
             assert self.cfg.save_per_success <= 0, "cannot save a non-growing replay"
             self.replay.freeze_bc_replay = True
 
-    def eval(self, seed, policy) -> float:
+    def eval(self, seed, policy,steps = 0) -> float:
         random_state = np.random.get_state()
-
+        record_dir = self.cfg.record_dir + f"/steps{steps}/"
+        if not os.path.exists(record_dir):
+            os.makedirs(record_dir)
         if self.cfg.mp_eval:
             scores: list[float] = run_eval_mp(
                 env_params=self.eval_env_params,
@@ -269,7 +275,8 @@ class Workspace:
                 agent=policy,
                 num_game=self.cfg.num_eval_episode,
                 seed=seed,
-                record_dir=None,
+                #record_dir=self.cfg.record_dir,
+                record_dir = record_dir,
                 verbose=False,
             )
 
@@ -388,7 +395,7 @@ class Workspace:
         with stopwatch.time("eval"):
             eval_seed = (self.global_step // self.cfg.log_per_step) * self.cfg.num_eval_episode
             stat["eval/seed"].append(eval_seed)
-            eval_score = self.eval(seed=eval_seed, policy=self.agent)
+            eval_score = self.eval(seed=eval_seed, policy=self.agent,steps = self.global_step)
             stat["score/score"].append(eval_score)
 
             original_act_method = self.agent.cfg.act_method
@@ -400,7 +407,7 @@ class Workspace:
 
             if self.agent.cfg.act_method == "ibrl_soft":
                 with self.agent.override_act_method("ibrl"):
-                    greedy_score = self.eval(seed=eval_seed, policy=self.agent)
+                    greedy_score = self.eval(seed=eval_seed, policy=self.agent,steps = self.global_step)
                     stat["score/greedy_score"].append(greedy_score)
                     stat["score_diff/greedy-soft"].append(greedy_score - eval_score)
             assert self.agent.cfg.act_method == original_act_method

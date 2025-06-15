@@ -1,4 +1,5 @@
 task_name: "PickPlaceCan"
+rl_camera: "agentview"
 episode_length: 200
 stddev_max: 0.1
 use_state: 1
@@ -6,15 +7,16 @@ state_stack: 3
 add_bc_loss: 1
 pretrain_num_epoch: 5
 pretrain_only: 0
+# load_pretrained_agent: "release/model/robomimic/can_state/model0.pt"
 preload_num_data: 10
 preload_datapath: "release/data/robomimic/can/processed_data96.hdf5"
 num_warm_up_episode: 40
 num_train_step: 200000
 replay_buffer_size: 1000
 use_wb: 1
-mp_eval: 1
-log_per_step: 10000
-num_eval_episode: 50
+mp_eval: 0
+log_per_step: 20000
+num_eval_episode: 10
 num_critic_update: 5
 q_agent:
   act_method: "rl"
@@ -25,5 +27,7 @@ q_agent:
   state_actor:
     hidden_dim: 1024
     dropout: 0
-  bc_loss_coef: 0.1
-  bc_loss_dynamic: 1
+  bc_loss_coef: 0.5
+  bc_loss_dynamic: 0
+save_dir: "exps/rl/run_can_state_rft_bc0.5_static"
+record_dir: "exps/rl/run_can_state_rft_bc0.5_static"

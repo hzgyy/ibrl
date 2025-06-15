@@ -26,3 +26,4 @@ q_agent:
   critic:
     spatial_emb: 1024
     hidden_dim: 1024
+save_dir: "exps/rl/run_can_state_ibrl"

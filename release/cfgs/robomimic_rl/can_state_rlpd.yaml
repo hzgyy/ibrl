@@ -23,3 +23,4 @@ q_agent:
   state_actor:
     hidden_dim: 1024
     dropout: 0
+save_dir: "exps/rl/run_can_state_rlpd"
