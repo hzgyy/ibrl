@@ -10,12 +10,13 @@ import numpy as np
 
 import common_utils
 from common_utils import ibrl_utils as utils
-from evaluate import run_eval, run_eval_mp
+from evaluate import run_eval, run_eval_mp,eval_kl
 from env.robosuite_wrapper import PixelRobosuite
 from rl.q_agent import QAgent, QAgentConfig
 from rl import replay
 import train_bc
-
+from rl.sample_policy import DGN,DGNConfig
+import time
 
 @dataclass
 class MainConfig(common_utils.RunConfig):
@@ -50,7 +51,7 @@ class MainConfig(common_utils.RunConfig):
     preload_datapath: str = ""
     freeze_bc_replay: int = 1
     # pretrain rl policy with bc and finetune
-    pretrain_only: int = 1
+    pretrain_only: int = 0
     pretrain_num_epoch: int = 0
     pretrain_epoch_len: int = 10000
     load_pretrained_agent: str = ""
@@ -64,10 +65,20 @@ class MainConfig(common_utils.RunConfig):
     mp_eval: int = 0  # eval with multiprocess
     num_train_step: int = 200000
     log_per_step: int = 5000
+    #inril
+    inril: int = 0
+    bc_per_rl: int = 1
+    inril_epochs: int = 5
+    inril_adap: int = 0
+    #offline rl
+    offline_rl: int = 0
+    #dgn
+    use_dgn: int = 0
+    sampling_update_freq: int = 1
     # log
     save_dir: str = "exps/rl/run_can_state_rft"
     use_wb: int = 1
-    record_dir: str = "exps/rl/run_can_state_rft"
+    record_dir: str = None
 
     def __post_init__(self):
         self.rl_cameras = self.rl_camera.split("+")
@@ -126,6 +137,7 @@ class Workspace:
 
         self.global_step = 0
         self.global_episode = 0
+        # self.pretrain_over_global_step = 0
         self.train_step = 0
         self._setup_env()
 
@@ -137,6 +149,7 @@ class Workspace:
             self.train_env.action_dim,
             self.cfg.rl_camera,
             cfg.q_agent,
+            self.cfg.inril,
         )
 
         if not from_main:
@@ -164,6 +177,9 @@ class Workspace:
             self.agent.add_bc_policy(copy.deepcopy(bc_policy))
             self.bc_policy = bc_policy
 
+        self.dgn_policy: DGN = None
+        if cfg.use_dgn:
+            self.dgn_policy = DGN(self.train_env.observation_shape[0],self.train_env.action_dim,DGNConfig())
         self._setup_replay()
 
     def _setup_env(self):
@@ -223,10 +239,10 @@ class Workspace:
             use_bc = True
         if self.cfg.save_per_success > 0:
             use_bc = True
-        if self.cfg.pretrain_num_epoch > 0 or self.cfg.add_bc_loss:
+        if self.cfg.pretrain_num_epoch > 0 or self.cfg.add_bc_loss or self.cfg.inril:
             assert self.cfg.preload_num_data
             use_bc = True
-
+        use_bc = True
         self.replay = replay.ReplayBuffer(
             self.cfg.nstep,
             self.cfg.discount,
@@ -251,15 +267,18 @@ class Workspace:
                 reward_scale=self.cfg.env_reward_scale,
                 record_sim_state=bool(self.cfg.save_per_success > 0),
             )
+            self.replay.freeze_bc_replay = True
         if self.cfg.freeze_bc_replay:
             assert self.cfg.save_per_success <= 0, "cannot save a non-growing replay"
             self.replay.freeze_bc_replay = True
 
     def eval(self, seed, policy,steps = 0) -> float:
         random_state = np.random.get_state()
-        record_dir = self.cfg.record_dir + f"/steps{steps}/"
-        if not os.path.exists(record_dir):
-            os.makedirs(record_dir)
+        record_dir = None
+        if self.cfg.record_dir != None:
+            record_dir = self.cfg.record_dir + f"/steps{steps}/"
+            if not os.path.exists(record_dir):
+                os.makedirs(record_dir)
         if self.cfg.mp_eval:
             scores: list[float] = run_eval_mp(
                 env_params=self.eval_env_params,
@@ -335,13 +354,19 @@ class Workspace:
             self.warm_up()
 
         stopwatch = common_utils.Stopwatch()
+        # eval at beginning
+        self.log_and_save(stopwatch, stat, saver)
         obs, _ = self.train_env.reset()
         self.replay.new_episode(obs)
         while self.global_step < self.cfg.num_train_step:
             ### act ###
             with stopwatch.time("act"), torch.no_grad(), utils.eval_mode(self.agent):
                 stddev = utils.schedule(self.cfg.stddev_schedule, self.global_step)
-                action = self.agent.act(obs, eval_mode=False, stddev=stddev)
+                if self.cfg.use_dgn:
+                    mu = self.agent.act(obs, eval_mode=True, stddev=stddev)
+                    action = self.dgn_policy.get_exploration(obs,mu)
+                else:
+                    action = self.agent.act(obs, eval_mode=False, stddev=stddev)
                 stat["data/stddev"].append(stddev)
 
             ### env.step ###
@@ -371,8 +396,19 @@ class Workspace:
             ### train ###
             if self.global_step % self.cfg.update_freq == 0:
                 with stopwatch.time("train"):
-                    self.rl_train(stat)
+                    if self.cfg.inril and self.train_step % self.cfg.bc_per_rl == 0:
+                        self.inril_train(stat)
+                        if self.cfg.inril_adap:
+                            self.cfg.bc_per_rl += 1
+                    else:
+                        self.rl_train(stat)
                     self.train_step += 1
+            
+            if self.cfg.use_dgn and self.global_step % self.cfg.sampling_update_freq == 0:
+                batch = self.replay.sample_bc(self.cfg.batch_size, "cuda")
+                mu = self.agent.act(batch.obs, eval_mode=True, stddev=stddev)
+                loss = self.dgn_policy.update(batch.obs,batch.action,mu)
+                stat["data/dgn_loss"].append(float(loss))
 
     def log_and_save(
         self,
@@ -397,6 +433,14 @@ class Workspace:
             stat["eval/seed"].append(eval_seed)
             eval_score = self.eval(seed=eval_seed, policy=self.agent,steps = self.global_step)
             stat["score/score"].append(eval_score)
+            # calculate kl divergence of current agent with reference agent
+            # mix_kl,off_kl,mix_q,off_q,off_q_consis,delta_q = self.calculate_metric()
+            # stat["score/mix_kl"].append(mix_kl)
+            # stat["score/off_kl"].append(off_kl)
+            # stat["score/mix_q"].append(mix_q)
+            # stat["score/off_q"].append(off_q)
+            # stat["score/off_q_consis"].append(off_q_consis)
+            # stat["score/delta_q"].append(delta_q)
 
             original_act_method = self.agent.cfg.act_method
             # if self.agent.cfg.act_method != "rl":
@@ -435,40 +479,113 @@ class Workspace:
             bc_batch = None
             if update_actor and self.cfg.add_bc_loss:
                 bc_batch = self.replay.sample_bc(self.cfg.batch_size, "cuda:0")
-
             metrics = self.agent.update(batch, stddev, update_actor, bc_batch, self.ref_agent)
-
             stat.append(metrics)
             stat["data/discount"].append(batch.bootstrap.mean().item())
 
-    def pretrain_policy(self):
-        stat = common_utils.MultiCounter(
-            self.work_dir,
-            bool(self.cfg.use_wb),
-            wb_exp_name=self.cfg.wb_exp,
-            wb_run_name=self.cfg.wb_run,
-            wb_group_name=self.cfg.wb_group,
-            config=self.cfg_dict,
+    def pretrain_policy(self,num_epoch = 0,pretrain=1):
+        # stat = common_utils.MultiCounter(
+        #     self.work_dir,
+        #     bool(self.cfg.use_wb),
+        #     wb_exp_name=self.cfg.wb_exp,
+        #     wb_run_name=self.cfg.wb_run,
+        #     wb_group_name=self.cfg.wb_group,
+        #     config=self.cfg_dict,
+        # )
+        wandb.init(
+            project="pretrain",  # 你的项目名
+            name="CalQL_2",            # 当前实验的名字
+            config={                    # 可选：记录一些配置参数
+                "lr": 0.001,
+                "batch_size": 256,
+                "env": "NutAssemblySquare"
+            }
         )
         saver = common_utils.TopkSaver(save_dir=self.work_dir, topk=1)
-
-        for epoch in range(self.cfg.pretrain_num_epoch):
+        if num_epoch == 0:
+            num_epoch = self.cfg.pretrain_num_epoch
+        for epoch in range(num_epoch):
             for _ in range(self.cfg.pretrain_epoch_len):
                 batch = self.replay.sample_bc(self.cfg.batch_size, "cuda")
-                metrics = self.agent.pretrain_actor_with_bc(batch)
+                if self.cfg.offline_rl:
+                    metrics = self.agent.pretrain_with_calql(batch)
+                elif self.cfg.q_agent.act_method == "awac":
+                    metrics = self.agent.update(batch,0.05,1)
+                else:
+                    metrics = self.agent.pretrain_actor_with_bc(batch)
 
-                for k, v in metrics.items():
-                    stat[k].append(v)
+                # for k, v in metrics.items():
+                #     stat[k].append(v)
+            if pretrain:
+                eval_seed = epoch * self.cfg.pretrain_epoch_len
+                score = self.eval(eval_seed, policy=self.agent)
+                # stat["pretrain/score"].append(score)
 
-            eval_seed = epoch * self.cfg.pretrain_epoch_len
-            score = self.eval(eval_seed, policy=self.agent)
-            stat["pretrain/score"].append(score)
+                # stat.summary(epoch, reset=True)
+                wandb.log(metrics, step=epoch)
+                saved = saver.save(self.agent.state_dict(), score, save_latest=True)
+                print(f"saved?: {saved},score:{score}")
+                print(common_utils.get_mem_usage())
+        # self.pretrain_over_global_step = self.global_step
+        # print(f"pretrain over global step:{self.global_step}")
+        # self.preload_num_data = 0
+        # self._setup_replay()
 
-            stat.summary(epoch, reset=True)
-            saved = saver.save(self.agent.state_dict(), score, save_latest=True)
-            print(f"saved?: {saved}")
-            print(common_utils.get_mem_usage())
+    def inril_train(self,stat: common_utils.MultiCounter):
+        saver = common_utils.TopkSaver(save_dir=self.work_dir, topk=1)
+        stddev = utils.schedule(self.cfg.stddev_schedule, self.global_step)
+        for i in range(self.cfg.num_critic_update):
+            il_batch = self.replay.sample_bc(self.cfg.batch_size, "cuda")
+            il_loss = self.agent.pretrain_actor_with_bc(il_batch,onlyloss=1)
+            if self.cfg.mix_rl_rate < 1:
+                rl_bsize = int(self.cfg.batch_size * self.cfg.mix_rl_rate)
+                bc_bsize = self.cfg.batch_size - rl_bsize
+                batch = self.replay.sample_rl_bc(rl_bsize, bc_bsize, "cuda:0")
+            else:
+                batch = self.replay.sample(self.cfg.batch_size, "cuda:0")
 
+            # in RED-Q, only update actor once
+            update_actor = i == self.cfg.num_critic_update - 1
+
+            bc_batch = None
+            if update_actor and self.cfg.add_bc_loss:
+                bc_batch = self.replay.sample_bc(self.cfg.batch_size, "cuda:0")
+
+            metrics = self.agent.update(batch, stddev, update_actor, bc_batch, self.ref_agent,il_loss)
+
+            stat.append(metrics)
+            stat["data/discount"].append(batch.bootstrap.mean().item())
+    
+    def calculate_metric(self):
+        num_samples = 512
+        # if self.cfg.mix_rl_rate < 1:
+        #     rl_bsize = int(num_samples * self.cfg.mix_rl_rate)
+        #     bc_bsize = num_samples - rl_bsize
+        #     batch = self.replay.sample_rl_bc(rl_bsize, bc_bsize, "cuda:0")
+        # else:
+        mix_batch = self.replay.sample(num_samples, "cuda:0")
+        off_batch = self.replay.sample_bc(num_samples,"cuda:0")
+        mix_obs_batch = mix_batch.obs["state"]
+        off_obs_batch = off_batch.obs["state"]
+        mix_act_batch = mix_batch.action["action"]
+        off_act_batch = off_batch.action["action"]
+        self.agent.critic.eval()
+        self.agent.actor.eval()
+        self.ref_agent.eval()
+        with torch.no_grad():
+            mix_kl = eval_kl(self.ref_agent,self.agent,mix_obs_batch,is_dict=0,stddev=0.05)
+            off_kl = eval_kl(self.ref_agent,self.agent,off_obs_batch,is_dict=0,stddev=0.05)
+            off_qs = self.agent.critic.forward(off_obs_batch,off_act_batch).min(-1)[0]
+            off_ori_qs = self.ref_agent.critic.forward(off_obs_batch,off_act_batch).min(-1)[0]
+            mix_qs = self.agent.critic.forward(mix_obs_batch,mix_act_batch).min(-1)[0]
+            delta_q = (off_ori_qs-off_qs).mean()
+            # compute q's bellmen consistency on offline data
+            off_next_act = self.agent.actor.forward(off_batch.next_obs,0.05).sample()
+            off_next_qs = self.agent.critic.forward(off_batch.next_obs["state"],off_next_act).min(-1)[0]
+            off_q_consis = (off_batch.reward + off_batch.bootstrap*off_next_qs - off_qs).mean()
+        self.agent.critic.eval()
+        self.agent.actor.eval()
+        return mix_kl,off_kl,mix_qs.mean().item(),off_qs.mean().item(),off_q_consis.item(),delta_q.item()
 
 def load_model(weight_file, device):
     cfg_path = os.path.join(os.path.dirname(weight_file), f"cfg.yaml")

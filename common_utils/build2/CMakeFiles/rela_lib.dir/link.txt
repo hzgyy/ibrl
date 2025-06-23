@@ -1,0 +1,2 @@
+/usr/bin/ar qc librela_lib.a CMakeFiles/rela_lib.dir/rela/transition.cc.o CMakeFiles/rela_lib.dir/rela/replay.cc.o CMakeFiles/rela_lib.dir/rela/concurrent_queue.cc.o CMakeFiles/rela_lib.dir/rela/tensor_dict.cc.o CMakeFiles/rela_lib.dir/rela/episode.cc.o
+/usr/bin/ranlib librela_lib.a

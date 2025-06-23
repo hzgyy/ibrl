@@ -130,6 +130,12 @@ class Actor(nn.Module):
             mu = utils.clip_action_norm(mu, self.cfg.max_action_norm)
 
         return utils.TruncatedNormal(mu, std, max_action_norm=self.cfg.max_action_norm)
+    
+    def logp(self,obs: dict[str, torch.Tensor], reply:dict[str, torch.Tensor],std: float):
+        action = reply["action"]
+        dis = self.forward(obs,std)
+        log_p = dis.log_prob(action)
+        return log_p,sum(-1)
 
 
 @dataclass
@@ -153,9 +159,40 @@ class FcActor(nn.Module):
         if cfg.orth:
             self.net.apply(utils.orth_weight_init)
 
-    def forward(self, obs: dict[str, torch.Tensor], std):
-        mu = self.net(obs["state"])
+    # def forward(self, obs: dict[str, torch.Tensor], std,is_dict=1):
+    def forward(self, obs, std,is_dict=1):
+        # if std == 0:
+        #     std = 0.001
+        if is_dict:
+            mu = self.net(obs["state"])
+        else:
+            mu = self.net(obs)
         return utils.TruncatedNormal(mu, std)
+        # return torch.distributions.Normal(mu,std)
+
+    def torch_forward(self, obs: dict[str, torch.Tensor], std):
+        if std == 0:
+            std = 0.01
+        mu = self.net(obs["state"])
+        return torch.distributions.Normal(mu,std)
+    
+    def logp(self,obs: dict[str, torch.Tensor], action: torch.Tensor,std: float):
+        # mu = self.net(obs["state"])
+        # dis = torch.distributions.Normal(mu,std)
+        dist = self.forward(obs,std)
+        log_p = dist.log_prob(action)
+        return log_p.sum(-1)
+    
+    def act_with_prob(self, obs: dict[str, torch.Tensor], std=0.01,istensor=0):
+        if not istensor:
+            mu = self.net(obs["state"])
+        else:
+            mu = self.net(obs)
+        # dist = utils.TruncatedNormal(mu, std)
+        dist = torch.distributions.Normal(mu,std)
+        action = dist.rsample()
+        log_p = dist.log_prob(action)
+        return action,log_p.sum(-1)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,36 @@
+task_name: "PickPlaceCan"
+rl_camera: "agentview+robot0_eye_in_hand"
+episode_length: 200
+stddev_max: 0.1
+use_state: 1
+state_stack: 3
+add_bc_loss: 0
+pretrain_num_epoch: 0
+pretrain_epoch_len: 10000
+pretrain_only: 0
+load_pretrained_agent: "release/model/robomimic/can_pretrain_awac5/model0.pt"
+preload_num_data: 50
+preload_datapath: "release/data/robomimic/can/processed_data96.hdf5"
+num_warm_up_episode: 0
+num_train_step: 200000
+replay_buffer_size: 100000
+batch_size: 1024
+use_wb: 1
+mp_eval: 0
+inril: 0
+log_per_step: 5000
+num_eval_episode: 20
+num_critic_update: 5
+q_agent:
+  act_method: "awac"
+  state_critic:
+    num_q: 5
+    layer_norm: 1
+    hidden_dim: 1024
+  state_actor:
+    hidden_dim: 1024
+    dropout: 0.5
+  bc_loss_coef: 0
+  bc_loss_dynamic: 0
+save_dir: "exps/compare/can_exp3_set10_awac_pre5_big"
+# record_dir: "exps/compare/can_exp1_offpolicy"

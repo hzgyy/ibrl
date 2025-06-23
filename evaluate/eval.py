@@ -71,7 +71,7 @@ if __name__ == "__main__":
     import common_utils
     import train_bc
     import train_rl
-    from multi_process_eval import run_eval as mp_run_eval
+    from evaluate.multi_process_eval import run_eval as mp_run_eval
     import rich.traceback
 
     # make logging more beautiful

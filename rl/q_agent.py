@@ -2,7 +2,7 @@ from typing import Optional
 from dataclasses import dataclass, field
 import copy
 from contextlib import contextmanager
-
+import numpy as np
 import torch
 import torch.nn as nn
 import common_utils
@@ -14,6 +14,7 @@ from rl.critic import Critic, CriticConfig
 from rl.actor import Actor, ActorConfig
 from rl.actor import FcActor, FcActorConfig
 from rl.critic import MultiFcQ, MultiFcQConfig
+from pcgrad import PCGrad
 
 
 @dataclass
@@ -42,6 +43,8 @@ class QAgentConfig:
     # bc loss regularization
     bc_loss_coef: float = 0.1
     bc_loss_dynamic: int = 0  # dynamically scale bc loss weight
+    #sac
+    sac_alpha: float = 0.2
 
     def __post_init__(self):
         if self.bootstrap_method == "":
@@ -50,7 +53,7 @@ class QAgentConfig:
 
 class QAgent(nn.Module):
     def __init__(
-        self, use_state, obs_shape, prop_shape, action_dim, rl_camera: str, cfg: QAgentConfig
+        self, use_state, obs_shape, prop_shape, action_dim, rl_camera: str, cfg: QAgentConfig, inril = 0,
     ):
         super().__init__()
         self.use_state = use_state
@@ -101,7 +104,10 @@ class QAgent(nn.Module):
             self.encoder_opt = torch.optim.Adam(self.encoder.parameters(), lr=self.cfg.lr)
 
         self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr=self.cfg.lr)
-        self.actor_opt = torch.optim.Adam(self.actor.parameters(), lr=self.cfg.lr)
+        if inril:
+            self.actor_opt = PCGrad(torch.optim.Adam(self.actor.parameters(), lr=self.cfg.lr))
+        else:
+            self.actor_opt = torch.optim.Adam(self.actor.parameters(), lr=self.cfg.lr)
 
         # data augmentation
         self.aug = common_utils.RandomShiftsAug(pad=4)
@@ -188,8 +194,8 @@ class QAgent(nn.Module):
             assert "feat" not in obs
             obs["feat"] = self._encode(obs, augment=False)
 
-        if self.cfg.act_method == "rl":
-            action = self._act_default(
+        if self.cfg.act_method == "rl" or "awac" or "sac" :
+            action,_ = self._act_default(
                 obs=obs,
                 eval_mode=eval_mode,
                 stddev=stddev,
@@ -235,7 +241,7 @@ class QAgent(nn.Module):
     ) -> torch.Tensor:
         actor = self.actor_target if use_target else self.actor
         dist = actor.forward(obs, stddev)
-
+        logp = None
         if eval_mode:
             assert not self.training
 
@@ -243,8 +249,11 @@ class QAgent(nn.Module):
             action = dist.mean
         else:
             action = dist.sample(clip=clip)
+            # action = dist.rsample()
+            logp = dist.log_prob(action).sum(-1)
+        return action,logp
 
-        return action
+        
 
     def _act_ibrl(
         self,
@@ -269,6 +278,7 @@ class QAgent(nn.Module):
             rl_action = rl_dist.mean
         else:
             rl_action = rl_dist.sample(clip)
+            # rl_action = rl_dist.sample()
 
         rl_bc_actions = torch.stack([rl_action, bc_action], dim=1)
         bsize, num_action, _ = rl_bc_actions.size()
@@ -349,6 +359,7 @@ class QAgent(nn.Module):
             rl_action = rl_dist.mean
         else:
             rl_action = rl_dist.sample(clip)
+            # rl_action = rl_dist.sample()
 
         rl_bc_actions = torch.stack([rl_action, bc_action], dim=1)
 
@@ -406,8 +417,8 @@ class QAgent(nn.Module):
             # use train mode as we use actor dropout
             assert self.actor_target.training
 
-            if self.cfg.bootstrap_method == "rl":
-                next_action = self._act_default(
+            if self.cfg.bootstrap_method == "rl" or self.cfg.bootstrap_method == "awac"  or "sac":
+                next_action,next_act_logp = self._act_default(
                     obs=next_obs,
                     eval_mode=False,
                     stddev=stddev,
@@ -442,8 +453,10 @@ class QAgent(nn.Module):
             else:
                 target_q = self.critic_target.forward_k(next_obs["state"], next_action).min(-1)[0]
 
-            target_q = (reward + (discount * target_q)).detach()
-
+            if self.cfg.act_method == "sac":
+                target_q = (reward + discount *(target_q-self.cfg.sac_alpha*next_act_logp)).detach()
+            else:
+                target_q = (reward + (discount * target_q)).detach()
         action = reply["action"]
         loss_fn = nn.functional.mse_loss
         if isinstance(self.critic, Critic):
@@ -475,19 +488,51 @@ class QAgent(nn.Module):
         if not self.use_state:
             assert "feat" in obs, "safety check"
 
-        action: torch.Tensor = self._act_default(
+        action,act_logp = self._act_default(
             obs=obs,
             eval_mode=False,
             stddev=stddev,
             clip=self.cfg.stddev_clip,
             use_target=False,
         )
+        # action,act_lopp = self.actor.act_with_prob(obs,stddev)
 
         if isinstance(self.critic, Critic):
             q = torch.min(*self.critic.forward(obs["feat"], obs["prop"], action))
         else:
             q: torch.Tensor = self.critic(obs["state"], action).min(-1)[0]
-        actor_loss = -q.mean()
+        if self.cfg.act_method == 'sac':
+            actor_loss = (-q+self.cfg.sac_alpha*act_logp).mean()
+        else:
+            actor_loss = -q.mean()
+        
+        return actor_loss
+
+    def _compute_awac_actor_loss(self, obs: dict[str, torch.Tensor], action:dict[str, torch.Tensor],stddev: float):
+        if not self.use_state:
+            assert "feat" in obs, "safety check"
+        old_actions = action["action"]
+        action: torch.Tensor; _ = self._act_default(
+            obs=obs,
+            eval_mode=False,
+            stddev=stddev,
+            clip=self.cfg.stddev_clip,
+            use_target=False,
+        )
+        action = action.detach()
+        if isinstance(self.critic, Critic):
+            v_pi = torch.min(*self.critic.forward(obs["feat"], obs["prop"], action))
+        else:
+            v_pi = self.critic.forward(obs["state"], action).min(-1)[0]
+        if isinstance(self.critic, Critic):
+            q_old_actions = torch.min(*self.critic.forward(obs["feat"], obs["prop"], old_actions))
+        else:
+            q_old_actions = self.critic.forward(obs["state"], old_actions).min(-1)[0]
+        adv_pi = q_old_actions - v_pi
+        beta = 2
+        weights = torch.nn.functional.softmax(adv_pi/beta,dim=0)
+        log_p = self.actor.logp(obs,old_actions,stddev)
+        actor_loss = (-log_p * len(weights)*weights.detach()).mean()
         return actor_loss
 
     def _compute_actor_bc_loss(self, batch, *, backprop_encoder):
@@ -500,7 +545,7 @@ class QAgent(nn.Module):
         if not backprop_encoder and not self.use_state:
             obs["feat"] = obs["feat"].detach()
 
-        pred_action = self._act_default(
+        pred_action,_ = self._act_default(
             obs=obs,
             eval_mode=False,
             stddev=0,
@@ -512,9 +557,25 @@ class QAgent(nn.Module):
         loss = loss.sum(1).mean(0)
         return loss
 
-    def update_actor(self, obs: dict[str, torch.Tensor], stddev: float):
+    def update_actor(self, obs: dict[str, torch.Tensor], stddev: float,il_loss = None):
         metrics = {}
         actor_loss = self._compute_actor_loss(obs, stddev)
+        metrics["train/actor_loss"] = actor_loss.item()
+
+        if il_loss != None:
+            self.actor_opt.zero_grad()
+            losses = [il_loss,actor_loss]
+            self.actor_opt.pc_backward(losses)
+        else:
+            self.actor_opt.zero_grad()
+            actor_loss.backward()
+        self.actor_opt.step()
+
+        return metrics
+    
+    def update_awac_actor(self, obs: dict[str, torch.Tensor],action: dict[str, torch.Tensor], stddev: float):
+        metrics = {}
+        actor_loss = self._compute_awac_actor_loss(obs, action, stddev)
         metrics["train/actor_loss"] = actor_loss.item()
 
         self.actor_opt.zero_grad(set_to_none=True)
@@ -582,8 +643,10 @@ class QAgent(nn.Module):
         update_actor,
         bc_batch=None,
         ref_agent: Optional["QAgent"] = None,
+        il_loss = None,
     ):
         obs: dict[str, torch.Tensor] = batch.obs
+        action: dict[str, torch.Tensor] = batch.action
         reward: torch.Tensor = batch.reward
         discount: torch.Tensor = batch.bootstrap
         next_obs: dict[str, torch.Tensor] = batch.next_obs
@@ -614,7 +677,10 @@ class QAgent(nn.Module):
             obs["feat"] = obs["feat"].detach()
 
         if bc_batch is None:
-            actor_metric = self.update_actor(obs, stddev)
+            if self.cfg.act_method == "awac":
+                actor_metric = self.update_awac_actor(obs,action,stddev)
+            else:
+                actor_metric = self.update_actor(obs, stddev,il_loss)
         else:
             assert ref_agent is not None
             actor_metric = self.update_actor_rft(obs, stddev, bc_batch, ref_agent)
@@ -624,10 +690,12 @@ class QAgent(nn.Module):
 
         return metrics
 
-    def pretrain_actor_with_bc(self, batch):
+    def pretrain_actor_with_bc(self, batch,onlyloss=0):
         """pretrain actor and encoder with bc"""
         loss = self._compute_actor_bc_loss(batch, backprop_encoder=True)
-
+        if onlyloss:
+            return loss
+        
         if not self.use_state:
             self.encoder_opt.zero_grad(set_to_none=True)
 
@@ -639,3 +707,119 @@ class QAgent(nn.Module):
         self.actor_opt.step()
 
         return {"pretrain/loss": loss.item()}
+
+    def pretrain_with_calql(self,batch,cal_alpha=1):
+        obs: dict[str, torch.Tensor] = batch.obs
+        action: torch.Tensor = batch.action["action"]
+        reward: torch.Tensor = batch.reward
+        discount: torch.Tensor = batch.bootstrap
+        next_obs: dict[str, torch.Tensor] = batch.next_obs
+        mc_return:torch.Tensor = batch.obs["mc_return"]
+        batch_size = reward.shape[0]
+        obs_dim = obs["state"].shape[-1]
+        act_dim = action.shape[-1]
+        stat = dict()
+        # update actor
+        new_actions, new_log_pis = self.actor.act_with_prob(obs)
+        if isinstance(self.critic, Critic):
+            qpi = torch.min(*self.critic.forward(obs["feat"], obs["prop"], new_actions))
+        else:
+            qpi = self.critic(obs["state"], new_actions).min(-1)[0]
+        actor_loss = (new_log_pis-qpi).mean()
+        # actor_loss = -qpi.mean()
+        self.actor_opt.zero_grad(set_to_none=True)
+        actor_loss.backward()
+        self.actor_opt.step()
+        stat['act loss'] = actor_loss.detach().item()
+        # compute q target and td loss
+        # assert False, f"reward:{reward}\n discount:{discount}\n,mc_return:{mc_return}"
+        loss_fn = nn.functional.mse_loss
+        if isinstance(self.critic, Critic):
+            q1_pred, q2_pred = self.critic.forward(obs["feat"], obs["prop"], action)
+        else:
+            qs: torch.Tensor = self.critic(obs["state"], action)
+            q1_pred,q2_pred = torch.split(qs, 1, dim=-1)
+            assert True, f'qs:{qs.shape},q1:{q1_pred.shape},qs:{q2_pred.shape}'
+        
+        next_pi_actions,_ = self.actor.act_with_prob(next_obs)
+        #assert next_pi_actions.shape == torch.Size((batch_size,act_dim)),f"next_pi_actions shape wrong:{next_pi_actions.shape}/{(batch_size,act_dim)}"
+        if isinstance(self.critic, Critic):
+            target_qval = torch.min(*self.critic_target(next_obs["feat"], next_obs["prop"], next_pi_actions))
+        else:
+            target_qval = self.critic_target.forward(next_obs["state"], next_pi_actions).min(-1)[0]
+        #assert target_qval.shape[0] == batch_size,f"target_qval shape wrong:{target_qval.shape}/{(batch_size,1)}"
+        td_target = (reward + discount*target_qval).detach().unsqueeze(-1)
+        
+        qf1_bellman_loss = loss_fn(q1_pred,td_target)
+        qf2_bellman_loss = loss_fn(q2_pred,td_target)
+
+        stat['bellman_loss'] = (qf1_bellman_loss+qf2_bellman_loss).detach().item()
+        # compute conservative regularizer
+        num_samples = 4
+        random_actions = (torch.rand(batch_size*num_samples,act_dim) * 2 - 1).to("cuda")
+        random_log_pi = np.log(0.5**action.shape[-1])
+        # assert random_actions.shape == torch.Size((num_samples,batch_size,act_dim)),f"random actions shape wrong:{random_actions.shape}/{(num_samples,batch_size,act_dim)}"
+        expand_obs = obs["state"].repeat_interleave(num_samples, dim=0)
+        expand_next_obs = next_obs["state"].repeat_interleave(num_samples, dim=0)
+        cql_curr_actions, cql_curr_log_pis = self.actor.act_with_prob(expand_obs,istensor=1)
+        cql_next_actions,cql_next_log_pis = self.actor.act_with_prob(expand_next_obs,istensor=1)
+        #assert False, f'obs:{expand_obs[0:8]}\n, cql_curr_actions:{cql_curr_actions[0:8]}'
+        if isinstance(self.critic, Critic):
+            feat = obs["feat"].unsqueeze(1).expand(-1,num_samples,-1)
+            prop = obs["prop"].unsqueeze(1).expand(-1,num_samples,-1)
+            cql_q1_rand,cql_q2_rand = self.critic.forward(feat, prop, random_actions) - random_log_pi
+            cql_q1_curr_actions,cql_q2_curr_actions = self.critic.forward(feat, prop, cql_curr_actions.detach()) - cql_curr_log_pis.detach()
+        else:
+            cql_q_rand = self.critic(expand_obs, random_actions.detach())
+            cql_q1_rand,cql_q2_rand = torch.split(cql_q_rand, 1, dim=-1)
+            cql_q_actions = self.critic(expand_obs, cql_curr_actions.detach())
+            cql_q1_curr_actions,cql_q2_curr_actions = torch.split(cql_q_actions, 1, dim=-1)
+            cql_q_next_actions = self.critic(expand_next_obs, cql_next_actions.detach())
+            cql_q1_next_actions,cql_q2_next_actions = torch.split(cql_q_next_actions, 1, dim=-1)
+            # assert q_rand_is.shape == torch.Size((num_samples,batch_size,1)),f"q_rand_is shape {q_rand_is.shape}!={(num_samples,batch_size,1)}"
+            # assert q_pi_is.shape == torch.Size((batch_size,1)),f"q_pi_is1 shape {q_pi_is.shape}!={(batch_size,1)}"
+        # calql's modification
+        cql_q1_rand = cql_q1_rand.reshape(batch_size,num_samples,1)
+        cql_q2_rand = cql_q2_rand.reshape(batch_size,num_samples,1)
+        cql_q1_curr_actions = cql_q1_curr_actions.reshape(batch_size,num_samples,1)
+        cql_q2_curr_actions = cql_q2_curr_actions.reshape(batch_size,num_samples,1)
+        cql_q1_next_actions = cql_q1_next_actions.reshape(batch_size,num_samples,1)
+        cql_q2_next_actions = cql_q2_next_actions.reshape(batch_size,num_samples,1)
+        
+        lower_bounds = mc_return.unsqueeze(1).expand(-1,num_samples,-1)
+        assert True,f'{mc_return[0:4]},{lower_bounds[0:4]}'
+        stat['bound_rate_q1_curr_actions'] = (cql_q1_curr_actions<lower_bounds).sum()/batch_size
+        stat['bound_rate_q2_curr_actions'] = (cql_q2_curr_actions<lower_bounds).sum()/batch_size
+        stat['bound_rate_q1_next_actions'] = (cql_q1_next_actions<lower_bounds).sum()/batch_size
+        stat['bound_rate_q2_next_actions'] = (cql_q2_next_actions<lower_bounds).sum()/batch_size
+        
+        cql_q1_curr_actions = torch.maximum(cql_q1_curr_actions, lower_bounds)
+        cql_q2_curr_actions = torch.maximum(cql_q2_curr_actions, lower_bounds)
+        cql_q1_next_actions = torch.maximum(cql_q1_next_actions, lower_bounds)
+        cql_q2_next_actions = torch.maximum(cql_q2_next_actions, lower_bounds)
+        assert True,f'q:{cql_q1_curr_actions.shape},log:{cql_curr_log_pis.shape}'
+        cql_q1_cat = torch.cat([cql_q1_rand-random_log_pi,
+                                cql_q1_curr_actions-cql_curr_log_pis.reshape(batch_size,num_samples,1),
+                                cql_q1_next_actions-cql_next_log_pis.reshape(batch_size,num_samples,1)],dim=1)
+        cql_q2_cat = torch.cat([cql_q2_rand-random_log_pi,
+                                cql_q2_curr_actions-cql_curr_log_pis.reshape(batch_size,num_samples,1),
+                                cql_q2_next_actions-cql_next_log_pis.reshape(batch_size,num_samples,1)],dim=1)
+        assert True,f"{cql_q1_cat.shape},{cql_q1_rand.shape},{cql_q1_curr_actions.shape}"
+        cql_q1_ood = torch.logsumexp(cql_q1_cat, dim=1)
+        cql_q2_ood = torch.logsumexp(cql_q2_cat, dim=1)
+        assert True,f"q1:{cql_q1_ood.shape},q2:{cql_q2_ood.shape}"
+
+        cql_q1_diff = (cql_q1_ood - q1_pred).mean()
+        cql_q2_diff = (cql_q2_ood - q2_pred).mean()
+        critic_loss = qf1_bellman_loss+qf2_bellman_loss + cal_alpha*(cql_q1_diff+cql_q2_diff)
+        # critic_loss = qf1_bellman_loss+qf2_bellman_loss
+        self.critic_opt.zero_grad()
+        critic_loss.backward()
+        self.critic_opt.step()
+
+        utils.soft_update_params(self.critic, self.critic_target, self.cfg.critic_target_tau)
+        #utils.soft_update_params(self.actor, self.actor_target, self.cfg.critic_target_tau)
+        stat['calql reg'] = (cql_q1_diff + cql_q2_diff).detach().item()
+        stat['critic loss'] = critic_loss.detach().item()
+        
+        return stat

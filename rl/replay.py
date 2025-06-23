@@ -113,6 +113,21 @@ class ReplayBuffer:
 
     def _push_episode(self, success):
         transition = self.episode.pop_transition()
+        #add bc return to transition
+        rewards = transition.reward
+        discount = transition.bootstrap
+        mc_return = []
+        temp_sum = 0
+        temp_tensordict = transition.obs
+        for r,d in zip(reversed(rewards),reversed(discount)):
+            temp_sum  = d*temp_sum + r
+            mc_return.append(temp_sum)
+        mc_return_tensor = torch.Tensor(mc_return[::-1])
+        assert transition.obs["state"].shape[0] == mc_return_tensor.shape[0],"shape of mc_return wrong!"
+        # transition.obs["mc_return"] = mc_return_tensor
+        temp_tensordict["mc_return"] = mc_return_tensor.unsqueeze(-1)
+        transition.obs = temp_tensordict
+        #assert False, f"reward:{transition.reward}\n discount:{transition.bootstrap}\n mc_return:{transition.obs['mc_return']}"
         self.replay.add(transition)
         self.num_episode += 1
 
