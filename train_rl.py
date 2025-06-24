@@ -10,7 +10,7 @@ import numpy as np
 
 import common_utils
 from common_utils import ibrl_utils as utils
-from evaluate import run_eval, run_eval_mp
+from evaluate import run_eval, run_eval_mp, eval_kl
 from env.robosuite_wrapper import PixelRobosuite
 from rl.q_agent import QAgent, QAgentConfig
 from rl import replay
@@ -67,7 +67,7 @@ class MainConfig(common_utils.RunConfig):
     # log
     save_dir: str = "exps/rl/run_can_state_rft"
     use_wb: int = 1
-    record_dir: str = "exps/rl/run_can_state_rft"
+    record_dir: str = None
 
     def __post_init__(self):
         self.rl_cameras = self.rl_camera.split("+")
@@ -226,7 +226,7 @@ class Workspace:
         if self.cfg.pretrain_num_epoch > 0 or self.cfg.add_bc_loss:
             assert self.cfg.preload_num_data
             use_bc = True
-
+        use_bc = True
         self.replay = replay.ReplayBuffer(
             self.cfg.nstep,
             self.cfg.discount,
@@ -257,9 +257,12 @@ class Workspace:
 
     def eval(self, seed, policy,steps = 0) -> float:
         random_state = np.random.get_state()
-        record_dir = self.cfg.record_dir + f"/steps{steps}/"
-        if not os.path.exists(record_dir):
-            os.makedirs(record_dir)
+        if self.cfg.record_dir == None:
+            record_dir = None
+        else:
+            record_dir = self.cfg.record_dir + f"/steps{steps}/"
+            if not os.path.exists(record_dir):
+                os.makedirs(record_dir)
         if self.cfg.mp_eval:
             scores: list[float] = run_eval_mp(
                 env_params=self.eval_env_params,
@@ -397,7 +400,13 @@ class Workspace:
             stat["eval/seed"].append(eval_seed)
             eval_score = self.eval(seed=eval_seed, policy=self.agent,steps = self.global_step)
             stat["score/score"].append(eval_score)
-
+            mix_kl,off_kl,mix_q,off_q,off_q_consis,delta_q = self.calculate_metric()
+            stat["score/mix_kl"].append(mix_kl)
+            stat["score/off_kl"].append(off_kl)
+            stat["score/mix_q"].append(mix_q)
+            stat["score/off_q"].append(off_q)
+            stat["score/off_q_consis"].append(off_q_consis)
+            stat["score/delta_q"].append(delta_q)
             original_act_method = self.agent.cfg.act_method
             # if self.agent.cfg.act_method != "rl":
             #     with self.agent.override_act_method("rl"):
@@ -468,6 +477,37 @@ class Workspace:
             saved = saver.save(self.agent.state_dict(), score, save_latest=True)
             print(f"saved?: {saved}")
             print(common_utils.get_mem_usage())
+    
+    def calculate_metric(self):
+        num_samples = 512
+        # if self.cfg.mix_rl_rate < 1:
+        #     rl_bsize = int(num_samples * self.cfg.mix_rl_rate)
+        #     bc_bsize = num_samples - rl_bsize
+        #     batch = self.replay.sample_rl_bc(rl_bsize, bc_bsize, "cuda:0")
+        # else:
+        mix_batch = self.replay.sample(num_samples, "cuda:0")
+        off_batch = self.replay.sample_bc(num_samples,"cuda:0")
+        mix_obs_batch = mix_batch.obs["state"]
+        off_obs_batch = off_batch.obs["state"]
+        mix_act_batch = mix_batch.action["action"]
+        off_act_batch = off_batch.action["action"]
+        self.agent.critic.eval()
+        self.agent.actor.eval()
+        self.ref_agent.eval()
+        with torch.no_grad():
+            mix_kl = eval_kl(self.ref_agent,self.agent,mix_obs_batch,is_dict=0,stddev=0.05)
+            off_kl = eval_kl(self.ref_agent,self.agent,off_obs_batch,is_dict=0,stddev=0.05)
+            off_qs = self.agent.critic.forward(off_obs_batch,off_act_batch).min(-1)[0]
+            off_ori_qs = self.ref_agent.critic.forward(off_obs_batch,off_act_batch).min(-1)[0]
+            mix_qs = self.agent.critic.forward(mix_obs_batch,mix_act_batch).min(-1)[0]
+            delta_q = (off_ori_qs-off_qs).mean()
+            # compute q's bellmen consistency on offline data
+            off_next_act = self.agent.actor.forward(off_batch.next_obs,0.05).sample()
+            off_next_qs = self.agent.critic.forward(off_batch.next_obs["state"],off_next_act).min(-1)[0]
+            off_q_consis = (off_batch.reward + off_batch.bootstrap*off_next_qs - off_qs).mean()
+        self.agent.critic.train()
+        self.agent.actor.train()
+        return mix_kl,off_kl,mix_qs.mean().item(),off_qs.mean().item(),off_q_consis.item(),delta_q.item()
 
 
 def load_model(weight_file, device):
@@ -493,7 +533,6 @@ def load_model(weight_file, device):
 
     agent = agent.to(device)
     return agent, eval_env, eval_env_params
-
 
 def main():
     cfg = pyrallis.parse(config_class=MainConfig)  # type: ignore

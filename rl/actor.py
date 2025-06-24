@@ -157,6 +157,12 @@ class FcActor(nn.Module):
         mu = self.net(obs["state"])
         return utils.TruncatedNormal(mu, std)
 
+    def torch_forward(self, obs: dict[str, torch.Tensor], std):
+        if std == 0:
+            std = 0.01
+        mu = self.net(obs["state"])
+        return torch.distributions.Normal(mu,std)
+
 
 if __name__ == "__main__":
     cfg = ActorConfig()
