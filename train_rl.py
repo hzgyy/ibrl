@@ -150,6 +150,11 @@ class Workspace:
                 # avoid overwriting critic
                 self.agent.critic.load_state_dict(critic_states)
                 self.agent.critic_target.load_state_dict(critic_states)
+            # load the good critic
+            # actor_states = copy.deepcopy(self.agent.actor.state_dict())
+            # self.agent.load_state_dict(torch.load("exps/compare/square_exp5_set7_ibrl_testerror/model0.pt"))
+            # self.agent.actor.load_state_dict(actor_states)
+            # self.agent.actor_target.load_state_dict(actor_states)
 
         self.ref_agent = copy.deepcopy(self.agent)
         # override to always use RL even when self.agent is ibrl
