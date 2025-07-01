@@ -181,6 +181,7 @@ class _MultiLinear(nn.Module):
                 # uniform(-1/sqrt(in_features), 1/sqrt(in_features)). For details, see
                 # https://github.com/pytorch/pytorch/issues/57109
                 torch.nn.init.kaiming_uniform_(self.weights.data[i].transpose(0, 1), a=math.sqrt(5))
+            self.weights.data[i] += 0.1 * torch.randn_like(self.weights.data[i])
 
     def __repr__(self):
         return f"_MultiLinear({self.in_dim} x {self.out_dim}, {self.num_net} nets)"

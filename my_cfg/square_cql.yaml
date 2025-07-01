@@ -1,0 +1,36 @@
+task_name: "NutAssemblySquare"
+rl_camera: "agentview+robot0_eye_in_hand"
+episode_length: 300
+stddev_max: 0.1
+use_state: 1
+state_stack: 3
+# bc_policy: "release/model/robomimic/square_state/model0.pt"
+# load_pretrained_agent: "release/model/robomimic/square_cql/model0.pt"
+# load_ref_agent: "release/model/robomimic/square_pretrain_awac5/model0.pt"
+# load_pretrained_agent: "exps/compare/square_exp5_set7_ibrl_testerror/model0.pt"
+pretrain_only: 1
+pretrain_num_epoch: 30
+pretrain_epoch_len: 10000
+load_policy_only: 0
+preload_num_data: 50
+preload_datapath: "release/data/robomimic/square/processed_data96.hdf5"
+num_warm_up_episode: 0
+num_train_step: 300000
+replay_buffer_size: 1000
+use_wb: 0
+# inril: 0
+mp_eval: 0
+log_per_step: 5
+num_eval_episode: 10
+num_critic_update: 5
+q_agent:
+  act_method: "cql"
+  state_critic:
+    num_q: 5
+    layer_norm: 1
+    hidden_dim: 1024
+  state_actor:
+    dropout: 0.5
+    hidden_dim: 1024
+save_dir: "release/model/robomimic/square_cql_fix_full"
+# record_dir: "video/square_exp5_set1_short"

@@ -4,20 +4,21 @@ episode_length: 300
 stddev_max: 0.1
 use_state: 1
 state_stack: 3
-bc_policy: "release/model/robomimic/square_state/model0.pt"
-load_pretrained_agent: "release/model/robomimic/square_pretrain_awac5/model0.pt"
+# bc_policy: "release/model/robomimic/square_state/model0.pt"
+load_pretrained_agent: "release/model/robomimic/square_cql_fix_fullmodel0.pt"
+# load_ref_agent: "release/model/robomimic/square_pretrain_awac5/model0.pt"
 # load_pretrained_agent: "exps/compare/square_exp5_set7_ibrl_testerror/model0.pt"
 load_policy_only: 0
-preload_num_data: 10
+preload_num_data: 25
 preload_datapath: "release/data/robomimic/square/processed_data96.hdf5"
-num_warm_up_episode: 20
-num_train_step: 100000
-replay_buffer_size: 1000
+num_warm_up_episode: 0
+num_train_step: 300000
+replay_buffer_size: 10000
 use_wb: 1
 # inril: 0
 mp_eval: 0
-log_per_step: 2000
-num_eval_episode: 20
+log_per_step: 2500
+num_eval_episode: 10
 num_critic_update: 5
 q_agent:
   act_method: "rl"
@@ -28,5 +29,5 @@ q_agent:
   state_actor:
     dropout: 0.5
     hidden_dim: 1024
-save_dir: "exps/compare/square_exp6_set1_rl"
-# record_dir: "exps/rl/run_can_state_ibrl_nooffline_UTD1"
+save_dir: "exps/compare/square_exp8_testvar"
+# record_dir: "video/square_exp5_set1_short"

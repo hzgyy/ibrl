@@ -14,6 +14,11 @@ from evaluate import run_eval, run_eval_mp, eval_kl
 from env.robosuite_wrapper import PixelRobosuite
 from rl.q_agent import QAgent, QAgentConfig
 from rl import replay
+from rl.rft import rftAgent
+from rl.ibrl import ibrlAgent,ibrlsoftAgent
+from rl.awac import awacAgent
+from rl.cql import cqlAgent
+from rl.test import testAgent
 import train_bc
 
 
@@ -66,6 +71,7 @@ class MainConfig(common_utils.RunConfig):
     log_per_step: int = 5000
     # log
     save_dir: str = "exps/rl/run_can_state_rft"
+    load_ref_agent: str = ""
     use_wb: int = 1
     record_dir: str = None
 
@@ -130,7 +136,15 @@ class Workspace:
         self._setup_env()
 
         print(self.train_env.observation_shape)
-        self.agent = QAgent(
+        # self.agent = QAgent(
+        #     self.cfg.use_state,
+        #     self.train_env.observation_shape,
+        #     self.train_env.prop_shape,
+        #     self.train_env.action_dim,
+        #     self.cfg.rl_camera,
+        #     cfg.q_agent,
+        # )
+        self.agent = build_agent(
             self.cfg.use_state,
             self.train_env.observation_shape,
             self.train_env.prop_shape,
@@ -157,6 +171,8 @@ class Workspace:
             # self.agent.actor_target.load_state_dict(actor_states)
 
         self.ref_agent = copy.deepcopy(self.agent)
+        if self.cfg.load_ref_agent != "":
+            self.ref_agent.load_state_dict(torch.load(self.cfg.load_ref_agent))
         # override to always use RL even when self.agent is ibrl
         self.ref_agent.cfg.act_method = "rl"
 
@@ -259,6 +275,29 @@ class Workspace:
         if self.cfg.freeze_bc_replay:
             assert self.cfg.save_per_success <= 0, "cannot save a non-growing replay"
             self.replay.freeze_bc_replay = True
+        # add buffer for evaluation
+        self.eval_replay = replay.ReplayBuffer(
+            self.cfg.nstep,
+            self.cfg.discount,
+            frame_stack=1,
+            max_episode_length=self.cfg.episode_length,
+            replay_size=self.cfg.replay_buffer_size,
+            use_bc=False,
+            save_per_success=self.cfg.save_per_success,
+            save_dir=self.cfg.save_dir,
+        )
+        replay.add_demos_to_replay(
+            self.eval_replay,
+            self.cfg.preload_datapath,
+            num_data=50,
+            rl_cameras=self.rl_cameras,
+            use_state=self.cfg.use_state,
+            obs_stack=self.obs_stack,
+            state_stack=self.cfg.state_stack,
+            prop_stack=self.prop_stack,
+            reward_scale=self.cfg.env_reward_scale,
+            record_sim_state=bool(self.cfg.save_per_success > 0),
+        )
 
     def eval(self, seed, policy,steps = 0) -> float:
         random_state = np.random.get_state()
@@ -343,6 +382,7 @@ class Workspace:
             self.warm_up()
 
         stopwatch = common_utils.Stopwatch()
+        self.log_and_save(stopwatch, stat, saver)
         obs, _ = self.train_env.reset()
         self.replay.new_episode(obs)
         while self.global_step < self.cfg.num_train_step:
@@ -405,13 +445,14 @@ class Workspace:
             stat["eval/seed"].append(eval_seed)
             eval_score = self.eval(seed=eval_seed, policy=self.agent,steps = self.global_step)
             stat["score/score"].append(eval_score)
-            mix_kl,off_kl,mix_q,off_q,off_q_consis,delta_q = self.calculate_metric()
+            mix_kl,off_kl,mix_q,off_q,off_q_consis,delta_q,pred_var = self.calculate_metric()
             stat["score/mix_kl"].append(mix_kl)
             stat["score/off_kl"].append(off_kl)
             stat["score/mix_q"].append(mix_q)
             stat["score/off_q"].append(off_q)
             stat["score/off_q_consis"].append(off_q_consis)
             stat["score/delta_q"].append(delta_q)
+            stat["score/pred_var"].append(pred_var)
             original_act_method = self.agent.cfg.act_method
             # if self.agent.cfg.act_method != "rl":
             #     with self.agent.override_act_method("rl"):
@@ -467,9 +508,16 @@ class Workspace:
         saver = common_utils.TopkSaver(save_dir=self.work_dir, topk=1)
 
         for epoch in range(self.cfg.pretrain_num_epoch):
+            #check diversity
+            with torch.no_grad():
+                batch = self.eval_replay.sample(self.cfg.batch_size, "cuda")
+                pred_qs_var = self.agent.critic.forward(batch.obs["state"],batch.action["action"]).var(dim=1,unbiased = False)
+                print(f'mean var:{pred_qs_var.mean()},max:{pred_qs_var.max(0)[0]},min:{pred_qs_var.min(0)[0]}')
             for _ in range(self.cfg.pretrain_epoch_len):
-                batch = self.replay.sample_bc(self.cfg.batch_size, "cuda")
-                metrics = self.agent.pretrain_actor_with_bc(batch)
+                #batch = self.replay.sample_bc(self.cfg.batch_size, "cuda")
+                batch = self.eval_replay.sample(self.cfg.batch_size, "cuda")
+                # metrics = self.agent.pretrain_actor_with_bc(batch)
+                metrics = self.agent.update(batch,0.01,True)
 
                 for k, v in metrics.items():
                     stat[k].append(v)
@@ -477,7 +525,7 @@ class Workspace:
             eval_seed = epoch * self.cfg.pretrain_epoch_len
             score = self.eval(eval_seed, policy=self.agent)
             stat["pretrain/score"].append(score)
-
+            
             stat.summary(epoch, reset=True)
             saved = saver.save(self.agent.state_dict(), score, save_latest=True)
             print(f"saved?: {saved}")
@@ -491,7 +539,7 @@ class Workspace:
         #     batch = self.replay.sample_rl_bc(rl_bsize, bc_bsize, "cuda:0")
         # else:
         mix_batch = self.replay.sample(num_samples, "cuda:0")
-        off_batch = self.replay.sample_bc(num_samples,"cuda:0")
+        off_batch = self.eval_replay.sample(num_samples,"cuda:0")
         mix_obs_batch = mix_batch.obs["state"]
         off_obs_batch = off_batch.obs["state"]
         mix_act_batch = mix_batch.action["action"]
@@ -504,15 +552,20 @@ class Workspace:
             off_kl = eval_kl(self.ref_agent,self.agent,off_obs_batch,is_dict=0,stddev=0.05)
             off_qs = self.agent.critic.forward(off_obs_batch,off_act_batch).min(-1)[0]
             off_ori_qs = self.ref_agent.critic.forward(off_obs_batch,off_act_batch).min(-1)[0]
-            mix_qs = self.agent.critic.forward(mix_obs_batch,mix_act_batch).min(-1)[0]
+            mix_qs = self.agent.critic.forward(mix_obs_batch,mix_act_batch)
+            row_var = mix_qs.var(dim=1,unbiased=False)
+            pred_var = row_var.mean()
+            print(f'sample:{mix_qs[0]},max var:{row_var.max(0)[0]},min:{row_var.min(0)[0]}')
+            mix_qs = mix_qs.min(-1)[0]
             delta_q = (off_ori_qs-off_qs).mean()
             # compute q's bellmen consistency on offline data
             off_next_act = self.agent.actor.forward(off_batch.next_obs,0.05).sample()
             off_next_qs = self.agent.critic.forward(off_batch.next_obs["state"],off_next_act).min(-1)[0]
+            
             off_q_consis = (off_batch.reward + off_batch.bootstrap*off_next_qs - off_qs).mean()
         self.agent.critic.train()
         self.agent.actor.train()
-        return mix_kl,off_kl,mix_qs.mean().item(),off_qs.mean().item(),off_q_consis.item(),delta_q.item()
+        return mix_kl,off_kl,mix_qs.mean().item(),off_qs.mean().item(),off_q_consis.item(),delta_q.item(),pred_var.item()
 
 
 def load_model(weight_file, device):
@@ -538,6 +591,25 @@ def load_model(weight_file, device):
 
     agent = agent.to(device)
     return agent, eval_env, eval_env_params
+
+def build_agent(use_state, obs_shape, prop_shape, action_dim, rl_camera: str, cfg: QAgentConfig):
+    if cfg.act_method == "rl":
+        return QAgent(use_state,obs_shape,prop_shape,action_dim,rl_camera,cfg)
+    if cfg.act_method == "rft":
+        return rftAgent(use_state,obs_shape,prop_shape,action_dim,rl_camera,cfg)
+    if cfg.act_method == "ibrl":
+        return ibrlAgent(use_state,obs_shape,prop_shape,action_dim,rl_camera,cfg)
+    if cfg.act_method == "ibrl_soft":
+        return ibrlsoftAgent(use_state,obs_shape,prop_shape,action_dim,rl_camera,cfg)
+    if cfg.act_method == "awac":
+        return awacAgent(use_state,obs_shape,prop_shape,action_dim,rl_camera,cfg)
+    if cfg.act_method == "cql":
+        return cqlAgent(use_state,obs_shape,prop_shape,action_dim,rl_camera,cfg)
+    if cfg.act_method == "test":
+        return testAgent(use_state,obs_shape,prop_shape,action_dim,rl_camera,cfg)
+    else:
+        assert False, f"Unknown rl type {cfg.act_method}."
+
 
 def main():
     cfg = pyrallis.parse(config_class=MainConfig)  # type: ignore

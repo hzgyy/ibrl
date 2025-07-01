@@ -162,6 +162,11 @@ class FcActor(nn.Module):
             std = 0.01
         mu = self.net(obs["state"])
         return torch.distributions.Normal(mu,std)
+    
+    def logp(self,obs: dict[str, torch.Tensor], action: torch.Tensor,std: float):
+        dist = self.forward(obs,std)
+        log_p = dist.log_prob(action)
+        return log_p.sum(-1)
 
 
 if __name__ == "__main__":
