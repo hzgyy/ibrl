@@ -50,7 +50,7 @@ class ReplayBuffer:
             frame_stack=frame_stack,
             n_step=nstep,
             capacity=replay_size,
-            seed=1,
+            seed=42,
             prefetch=3,
             extra=0.1,
         )

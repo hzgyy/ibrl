@@ -14,11 +14,7 @@ from evaluate import run_eval, run_eval_mp, eval_kl
 from env.robosuite_wrapper import PixelRobosuite
 from rl.q_agent import QAgent, QAgentConfig
 from rl import replay
-from rl.rft import rftAgent
-from rl.ibrl import ibrlAgent,ibrlsoftAgent
-from rl.awac import awacAgent
-from rl.cql import cqlAgent
-from rl.test import testAgent
+from rl import rftAgent,ibrlAgent,ibrlsoftAgent,awacAgent,cqlAgent,testAgent
 import train_bc
 
 
@@ -70,7 +66,7 @@ class MainConfig(common_utils.RunConfig):
     num_train_step: int = 200000
     log_per_step: int = 5000
     # log
-    save_dir: str = "exps/rl/run_can_state_rft"
+    save_dir: str = ""
     load_ref_agent: str = ""
     use_wb: int = 1
     record_dir: str = None
@@ -467,9 +463,10 @@ class Workspace:
                     stat["score_diff/greedy-soft"].append(greedy_score - eval_score)
             assert self.agent.cfg.act_method == original_act_method
 
-        saved = saver.save(self.agent.state_dict(), eval_score, save_latest=True)
         stat.summary(self.global_step, reset=True)
-        print(f"saved?: {saved}")
+        if self.cfg.save_dir != "":
+            saved = saver.save(self.agent.state_dict(), eval_score, save_latest=True)
+            print(f"saved?: {saved}")
         stopwatch.summary(reset=True)
         print("total time:", common_utils.sec2str(stopwatch.total_time))
         print(common_utils.get_mem_usage())
@@ -493,6 +490,7 @@ class Workspace:
 
             metrics = self.agent.update(batch, stddev, update_actor, bc_batch, self.ref_agent)
 
+            print(batch.bootstrap[0])
             stat.append(metrics)
             stat["data/discount"].append(batch.bootstrap.mean().item())
 

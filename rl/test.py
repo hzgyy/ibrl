@@ -34,7 +34,8 @@ class testAgent(QAgent):
             target_q = torch.min(target_q1, target_q2)
         else:
             target_qs = self.critic_target.forward(next_obs["state"], next_action)
-        assert False, f'{target_qs.shape}'
+            target_q = target_qs.min(-1)[0]
+        next_qs_var = torch.sqrt(target_qs.var(dim=-1,unbiased=False))
         target_q = (reward + (discount * target_q)).detach()
 
         action = reply["action"]
@@ -47,7 +48,9 @@ class testAgent(QAgent):
             critic_loss = nn.functional.mse_loss(
                 qs, target_q.unsqueeze(1).repeat(1, qs.size(1)), reduction="none"
             )
-            critic_loss = critic_loss.sum(1).mean(0)
+            #weights = torch.nn.functional.softmax(-next_qs_var,dim=0).unsqueeze(-1)
+            weights = (torch.sigmoid(-next_qs_var*0.1)+0.5).unsqueeze(-1).detach()
+            critic_loss = (critic_loss*weights).sum(1).mean(0)
         
         metrics = {}
         metrics["train/critic_qt"] = target_q.mean().item()

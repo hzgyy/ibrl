@@ -290,7 +290,7 @@ class QAgent(nn.Module,ABC):
             q1, q2 = self.critic.forward(obs["feat"], obs["prop"], action)
             critic_loss = loss_fn(q1, target_q) + loss_fn(q2, target_q)
         else:
-            # change to forward k
+            # change to forward k， in order to update q nets on different batch
             #qs: torch.Tensor = self.critic.forward(obs["state"], action)
             qs: torch.Tensor = self.critic.forward_k(obs["state"], action)
             critic_loss = nn.functional.mse_loss(
@@ -339,29 +339,7 @@ class QAgent(nn.Module,ABC):
         else:
             q: torch.Tensor = self.critic(obs["state"], action).min(-1)[0]
         actor_loss = -q.mean()
-        return actor_loss
-
-    def compute_actor_bc_loss(self, batch, *, backprop_encoder):
-        obs: dict[str, torch.Tensor] = batch.obs
-
-        if not self.use_state:
-            assert "feat" not in obs, "safety check"
-            obs["feat"] = self._encode(obs, augment=True)
-
-        if not backprop_encoder and not self.use_state:
-            obs["feat"] = obs["feat"].detach()
-
-        pred_action = self._act_default(
-            obs=obs,
-            eval_mode=False,
-            stddev=0,
-            clip=None,
-            use_target=False,
-        )
-        action: torch.Tensor = batch.action["action"]
-        loss = nn.functional.mse_loss(pred_action, action, reduction="none")
-        loss = loss.sum(1).mean(0)
-        return loss
+        return actor_loss        
 
     def update_actor(
         self, 
