@@ -7,10 +7,11 @@ from typing import Optional
 import pyrallis
 import torch
 import numpy as np
+from tqdm import tqdm
 
 import common_utils
 from common_utils import ibrl_utils as utils
-from evaluate import run_eval, run_eval_mp, eval_kl
+from evaluate import run_eval, run_eval_mp, eval_kl,q_kl_divergence
 from env.robosuite_wrapper import PixelRobosuite
 from rl.q_agent import QAgent, QAgentConfig
 from rl import replay
@@ -294,6 +295,8 @@ class Workspace:
             reward_scale=self.cfg.env_reward_scale,
             record_sim_state=bool(self.cfg.save_per_success > 0),
         )
+        # change off batch
+        self.off_batch = self.eval_replay.sample(512,"cuda:0")
 
     def eval(self, seed, policy,steps = 0) -> float:
         random_state = np.random.get_state()
@@ -342,6 +345,8 @@ class Workspace:
                 # the policy has been pretrained/initialized
                 with torch.no_grad(), utils.eval_mode(self.agent):
                     action = self.agent.act(obs, eval_mode=True)
+                # action = torch.zeros(self.train_env.action_dim)
+                # action = action.uniform_(-1.0, 1.0)
             else:
                 action = torch.zeros(self.train_env.action_dim)
                 action = action.uniform_(-1.0, 1.0)
@@ -353,6 +358,8 @@ class Workspace:
             if terminal:
                 num_episode += 1
                 total_reward += self.train_env.episode_reward
+                if num_episode % 50 == 0:
+                    print(f'warm up episodes:{num_episode}')
                 if self.replay.size() < self.cfg.num_warm_up_episode:
                     self.replay.new_episode(obs)
                     obs, _ = self.train_env.reset()
@@ -376,6 +383,10 @@ class Workspace:
 
         if self.replay.num_episode < self.cfg.num_warm_up_episode:
             self.warm_up()
+            # warm up q
+            # for i in tqdm(range(10000)):
+            #     batch = self.replay.sample(self.cfg.batch_size, "cuda:0")
+            #     self.agent.update_critic(batch,self.cfg.stddev_max)
 
         stopwatch = common_utils.Stopwatch()
         self.log_and_save(stopwatch, stat, saver)
@@ -435,13 +446,13 @@ class Workspace:
 
         if self.replay.bc_replay is not None:
             stat["data/bc_replay_size"].append(self.replay.size(bc=True))
-
+        
         with stopwatch.time("eval"):
             eval_seed = (self.global_step // self.cfg.log_per_step) * self.cfg.num_eval_episode
             stat["eval/seed"].append(eval_seed)
             eval_score = self.eval(seed=eval_seed, policy=self.agent,steps = self.global_step)
             stat["score/score"].append(eval_score)
-            mix_kl,off_kl,mix_q,off_q,off_q_consis,delta_q,pred_var = self.calculate_metric()
+            mix_kl,off_kl,mix_q,off_q,off_q_consis,delta_q,pred_var,off_q_kl = self.calculate_metric()
             stat["score/mix_kl"].append(mix_kl)
             stat["score/off_kl"].append(off_kl)
             stat["score/mix_q"].append(mix_q)
@@ -449,6 +460,8 @@ class Workspace:
             stat["score/off_q_consis"].append(off_q_consis)
             stat["score/delta_q"].append(delta_q)
             stat["score/pred_var"].append(pred_var)
+            stat["score/off_q_kl"].append(off_q_kl)
+
             original_act_method = self.agent.cfg.act_method
             # if self.agent.cfg.act_method != "rl":
             #     with self.agent.override_act_method("rl"):
@@ -490,7 +503,6 @@ class Workspace:
 
             metrics = self.agent.update(batch, stddev, update_actor, bc_batch, self.ref_agent)
 
-            print(batch.bootstrap[0])
             stat.append(metrics)
             stat["data/discount"].append(batch.bootstrap.mean().item())
 
@@ -503,7 +515,8 @@ class Workspace:
             wb_group_name=self.cfg.wb_group,
             config=self.cfg_dict,
         )
-        saver = common_utils.TopkSaver(save_dir=self.work_dir, topk=1)
+        # change topk
+        saver = common_utils.TopkSaver(save_dir=self.work_dir, topk=30)
 
         for epoch in range(self.cfg.pretrain_num_epoch):
             #check diversity
@@ -537,7 +550,8 @@ class Workspace:
         #     batch = self.replay.sample_rl_bc(rl_bsize, bc_bsize, "cuda:0")
         # else:
         mix_batch = self.replay.sample(num_samples, "cuda:0")
-        off_batch = self.eval_replay.sample(num_samples,"cuda:0")
+        # off_batch = self.eval_replay.sample(num_samples,"cuda:0")
+        off_batch = self.off_batch
         mix_obs_batch = mix_batch.obs["state"]
         off_obs_batch = off_batch.obs["state"]
         mix_act_batch = mix_batch.action["action"]
@@ -548,22 +562,27 @@ class Workspace:
         with torch.no_grad():
             mix_kl = eval_kl(self.ref_agent,self.agent,mix_obs_batch,is_dict=0,stddev=0.05)
             off_kl = eval_kl(self.ref_agent,self.agent,off_obs_batch,is_dict=0,stddev=0.05)
-            off_qs = self.agent.critic.forward(off_obs_batch,off_act_batch).min(-1)[0]
-            off_ori_qs = self.ref_agent.critic.forward(off_obs_batch,off_act_batch).min(-1)[0]
+            off_qs = self.agent.critic.forward(off_obs_batch,off_act_batch)
+            off_ori_qs = self.ref_agent.critic.forward(off_obs_batch,off_act_batch)
+            #calculate off Qs divergence
+            off_q_kl = q_kl_divergence(off_qs,off_ori_qs)
+            off_qs = off_qs.min(-1)[0]
+            off_ori_qs = off_ori_qs.min(-1)[0]
+            #calculate delta q
+            delta_q = (off_ori_qs-off_qs).mean()
+            # calculate variance of q networks
             mix_qs = self.agent.critic.forward(mix_obs_batch,mix_act_batch)
             row_var = mix_qs.var(dim=1,unbiased=False)
             pred_var = row_var.mean()
             print(f'sample:{mix_qs[0]},max var:{row_var.max(0)[0]},min:{row_var.min(0)[0]}')
             mix_qs = mix_qs.min(-1)[0]
-            delta_q = (off_ori_qs-off_qs).mean()
             # compute q's bellmen consistency on offline data
             off_next_act = self.agent.actor.forward(off_batch.next_obs,0.05).sample()
             off_next_qs = self.agent.critic.forward(off_batch.next_obs["state"],off_next_act).min(-1)[0]
-            
             off_q_consis = (off_batch.reward + off_batch.bootstrap*off_next_qs - off_qs).mean()
         self.agent.critic.train()
         self.agent.actor.train()
-        return mix_kl,off_kl,mix_qs.mean().item(),off_qs.mean().item(),off_q_consis.item(),delta_q.item(),pred_var.item()
+        return mix_kl,off_kl,mix_qs.mean().item(),off_qs.mean().item(),off_q_consis.item(),delta_q.item(),pred_var.item(),off_q_kl.item()
 
 
 def load_model(weight_file, device):

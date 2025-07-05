@@ -5,9 +5,10 @@ stddev_max: 0.1
 use_state: 1
 state_stack: 3
 # bc_policy: "release/model/robomimic/square_state/model0.pt"
-load_pretrained_agent: "release/model/robomimic/square_pretrain_awac5/model0.pt"
+#load_pretrained_agent: "release/model/robomimic/square_pretrain_awac5/model0.pt"
 load_policy_only: 0
-preload_num_data: 30
+pretrain_num_epoch: 50
+preload_num_data: 50
 preload_datapath: "release/data/robomimic/square/processed_data96.hdf5"
 num_warm_up_episode: 0
 num_train_step: 300000
@@ -28,5 +29,5 @@ q_agent:
   state_actor:
     dropout: 0.5
     hidden_dim: 1024
-save_dir: "exps/compare/square_exp6_awac"
+save_dir: "release/model/robomimic/square_pretrain_awac50"
 # record_dir: "video/square_exp5_set7_ibrl_testerror"
