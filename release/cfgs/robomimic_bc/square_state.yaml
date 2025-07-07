@@ -8,5 +8,6 @@ state_policy:
   dropout: 0.5
   num_layer: 3
 use_wb: 1
-num_epoch: 20
+num_epoch: 10
 grad_clip: 100
+save_dir: "release/model/robomimic/square_bc10"

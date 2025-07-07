@@ -11,6 +11,7 @@ state_stack: 3
 load_policy_only: 0
 preload_num_data: 100
 preload_datapath: "release/data/robomimic/square/processed_data96.hdf5"
+mix_rl_rate: 0.5
 num_warm_up_episode: 0
 num_train_step: 300000
 replay_buffer_size: 10000
@@ -29,5 +30,5 @@ q_agent:
   state_actor:
     dropout: 0.5
     hidden_dim: 1024
-save_dir: "exps/compare/square_exp910_purerl_od"
+save_dir: "exps/compare/square_exp910_hypertanhQ"
 # record_dir: "video/square_exp5_set1_short"

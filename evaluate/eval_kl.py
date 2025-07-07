@@ -46,3 +46,4 @@ def q_kl_divergence(off_qs, off_ori_qs, tau=1.0):
     # KL divergence: sum_a p(a) * (logp(a) - logq(a))
     kl = torch.sum(p * (logp - logq), dim=1)          # shape: [B]
     return kl.mean()                                  # scalar
+
