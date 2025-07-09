@@ -15,7 +15,7 @@ from evaluate import run_eval, run_eval_mp, eval_kl,q_kl_divergence
 from env.robosuite_wrapper import PixelRobosuite
 from rl.q_agent import QAgent, QAgentConfig
 from rl import replay
-from rl import rftAgent,ibrlAgent,ibrlsoftAgent,awacAgent,cqlAgent,testAgent
+from rl import rftAgent,ibrlAgent,ibrlsoftAgent,awacAgent,cqlAgent,testAgent,pessorlAgent
 import train_bc
 
 
@@ -493,7 +493,8 @@ class Workspace:
                 batch = self.replay.sample_rl_bc(rl_bsize, bc_bsize, "cuda:0")
             else:
                 batch = self.replay.sample(self.cfg.batch_size, "cuda:0")
-
+            # do reward transform
+            batch.reward = batch.reward*10+5
             # in RED-Q, only update actor once
             update_actor = i == self.cfg.num_critic_update - 1
 
@@ -517,7 +518,6 @@ class Workspace:
         )
         # change topk
         saver = common_utils.TopkSaver(save_dir=self.work_dir, topk=30)
-
         for epoch in range(self.cfg.pretrain_num_epoch):
             #check diversity
             with torch.no_grad():
@@ -528,6 +528,7 @@ class Workspace:
                 #batch = self.replay.sample_bc(self.cfg.batch_size, "cuda")
                 batch = self.eval_replay.sample(self.cfg.batch_size, "cuda")
                 # metrics = self.agent.pretrain_actor_with_bc(batch)
+                batch.reward = batch.reward*10+5
                 metrics = self.agent.update(batch,0.01,True)
 
                 for k, v in metrics.items():
@@ -624,6 +625,9 @@ def build_agent(use_state, obs_shape, prop_shape, action_dim, rl_camera: str, cf
         return cqlAgent(use_state,obs_shape,prop_shape,action_dim,rl_camera,cfg)
     if cfg.act_method == "test":
         return testAgent(use_state,obs_shape,prop_shape,action_dim,rl_camera,cfg)
+    if cfg.act_method == "pessorl":
+        return pessorlAgent(use_state,obs_shape,prop_shape,action_dim,rl_camera,cfg,
+                            'release/model/robomimic/square_worldmodels/model0.pth')
     else:
         assert False, f"Unknown rl type {cfg.act_method}."
 

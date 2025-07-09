@@ -17,7 +17,7 @@ preload_datapath: "release/data/robomimic/square/processed_data96.hdf5"
 num_warm_up_episode: 0
 num_train_step: 300000
 replay_buffer_size: 1000
-use_wb: 1
+use_wb: 0
 # inril: 0
 mp_eval: 0
 log_per_step: 5
@@ -32,5 +32,5 @@ q_agent:
   state_actor:
     dropout: 0.5
     hidden_dim: 1024
-save_dir: "release/model/robomimic/square_cql_less"
+save_dir: "exp/compare/square_cql_test"
 # record_dir: "video/square_exp5_set1_short"

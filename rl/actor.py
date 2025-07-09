@@ -149,18 +149,22 @@ class FcActor(nn.Module):
         self.net = build_fc(
             obs_shape[0], cfg.hidden_dim, action_dim, cfg.num_layer, cfg.layer_norm, cfg.dropout
         )
-
+        self.action_dim = action_dim
         if cfg.orth:
             self.net.apply(utils.orth_weight_init)
 
     def forward(self, obs: dict[str, torch.Tensor], std):
         mu = self.net(obs["state"])
+        # mu = out[:,0:self.action_dim]
+        # std = torch.exp(out[:,self.action_dim:])
         return utils.TruncatedNormal(mu, std)
 
     def torch_forward(self, obs: dict[str, torch.Tensor], std):
         if std == 0:
             std = 0.01
         mu = self.net(obs["state"])
+        # mu = out[:,0:self.action_dim]
+        # std = torch.exp(out[:,self.action_dim:])
         return torch.distributions.Normal(mu,std)
     
     def logp(self,obs: dict[str, torch.Tensor], action: torch.Tensor,std: float):
