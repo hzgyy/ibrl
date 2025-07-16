@@ -5,3 +5,4 @@ from .pretrain.cql import cqlAgent
 from .finetune.test import testAgent
 from .pretrain.bc import bcAgent
 from .pretrain.pessorl import pessorlAgent
+from .finetune.sac import sacAgent

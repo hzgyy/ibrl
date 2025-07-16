@@ -172,6 +172,37 @@ class FcActor(nn.Module):
         log_p = dist.log_prob(action)
         return log_p.sum(-1)
 
+class RandFcActor(nn.Module):
+    def __init__(self, obs_shape, action_dim, cfg: FcActorConfig):
+        super().__init__()
+        assert len(obs_shape) == 1
+        self.cfg = cfg
+        self.net = build_fc(
+            obs_shape[0], cfg.hidden_dim, 2*action_dim, cfg.num_layer, cfg.layer_norm, cfg.dropout
+        )
+        self.action_dim = action_dim
+        if cfg.orth:
+            self.net.apply(utils.orth_weight_init)
+
+    def forward(self, obs: dict[str, torch.Tensor], std):
+        out = self.net(obs["state"])
+        mu = out[:,0:self.action_dim]
+        std = torch.exp(out[:,self.action_dim:])
+        return utils.TruncatedNormal(mu, std)
+
+    def torch_forward(self, obs: dict[str, torch.Tensor], std):
+        if std == 0:
+            std = 0.01
+        out = self.net(obs["state"])
+        mu = out[:,0:self.action_dim]
+        std = torch.exp(out[:,self.action_dim:])
+        return torch.distributions.Normal(mu,std)
+    
+    def logp(self,obs: dict[str, torch.Tensor], action: torch.Tensor,std: float):
+        dist = self.forward(obs,std)
+        log_p = dist.log_prob(action)
+        return log_p.sum(-1)
+
 
 if __name__ == "__main__":
     cfg = ActorConfig()

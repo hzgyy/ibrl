@@ -14,7 +14,7 @@ from networks.encoder import ResNetEncoder, ResNetEncoderConfig, DrQEncoder
 from networks.encoder import ResNet96Encoder, ResNet96EncoderConfig
 from rl.critic import Critic, CriticConfig
 from rl.actor import Actor, ActorConfig
-from rl.actor import FcActor, FcActorConfig
+from rl.actor import FcActor, FcActorConfig, RandFcActor
 from rl.critic import MultiFcQ, MultiFcQConfig
 
 
@@ -53,6 +53,9 @@ class QAgentConfig:
     cql_weight: float = 1.0
     min_q_weight: float = 1.0
     target_q_gap: float = 5.0
+    #sac
+    sac_alpha: float = 1.0
+    rand_actor: bool = False
     def __post_init__(self):
         if self.bootstrap_method == "":
             self.bootstrap_method = self.act_method
@@ -60,7 +63,7 @@ class QAgentConfig:
 
 class QAgent(nn.Module,ABC):
     def __init__(
-        self, use_state, obs_shape, prop_shape, action_dim, rl_camera: str, cfg: QAgentConfig
+        self, use_state, obs_shape, prop_shape, action_dim, rl_camera: str, cfg: QAgentConfig,
     ):
         super().__init__()
         self.use_state = use_state
@@ -69,7 +72,10 @@ class QAgent(nn.Module,ABC):
 
         if use_state:
             self.critic = MultiFcQ(obs_shape, action_dim, cfg.state_critic)
-            self.actor = FcActor(obs_shape, action_dim, cfg.state_actor)
+            if self.cfg.rand_actor:
+                self.actor = RandFcActor(obs_shape, action_dim, cfg.state_actor)
+            else:
+                self.actor = FcActor(obs_shape, action_dim, cfg.state_actor)
         else:
             self.encoder = self._build_encoders(obs_shape)
             repr_dim = self.encoder.repr_dim
@@ -400,20 +406,4 @@ class QAgent(nn.Module,ABC):
         utils.soft_update_params(self.actor, self.actor_target, self.cfg.critic_target_tau)
         metrics.update(actor_metric)
 
-        return metrics
-
-    def pretrain_actor_with_bc(self, batch):
-        """pretrain actor and encoder with bc"""
-        loss = self._compute_actor_bc_loss(batch, backprop_encoder=True)
-
-        if not self.use_state:
-            self.encoder_opt.zero_grad(set_to_none=True)
-
-        self.actor_opt.zero_grad(set_to_none=True)
-        loss.backward()
-
-        if not self.use_state:
-            self.encoder_opt.step()
-        self.actor_opt.step()
-
-        return {"pretrain/loss": loss.item()}
+        return metrics  

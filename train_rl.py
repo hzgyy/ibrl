@@ -15,9 +15,9 @@ from evaluate import run_eval, run_eval_mp, eval_kl,q_kl_divergence
 from env.robosuite_wrapper import PixelRobosuite
 from rl.q_agent import QAgent, QAgentConfig
 from rl import replay
-from rl import rftAgent,ibrlAgent,ibrlsoftAgent,awacAgent,cqlAgent,testAgent,pessorlAgent
+from rl import rftAgent,ibrlAgent,ibrlsoftAgent,awacAgent,cqlAgent,testAgent,pessorlAgent,sacAgent
 import train_bc
-
+from common_utils import Recorder, Stopwatch
 
 @dataclass
 class MainConfig(common_utils.RunConfig):
@@ -217,6 +217,7 @@ class Workspace:
             prop_stack=self.prop_stack,
             record_sim_state=bool(self.cfg.save_per_success > 0),
         )
+        self.train_env.reset()
         self.eval_env_params = dict(
             env_name=self.cfg.task_name,
             robots=self.cfg.robots,
@@ -380,7 +381,8 @@ class Workspace:
         )
         self.agent.set_stats(stat)
         saver = common_utils.TopkSaver(save_dir=self.work_dir, topk=1)
-
+        #temp
+        # self.temp_eval(5,42,'video/square_analysis')
         if self.replay.num_episode < self.cfg.num_warm_up_episode:
             self.warm_up()
             # warm up q
@@ -585,6 +587,79 @@ class Workspace:
         self.agent.actor.train()
         return mix_kl,off_kl,mix_qs.mean().item(),off_qs.mean().item(),off_q_consis.item(),delta_q.item(),pred_var.item(),off_q_kl.item()
 
+    def temp_eval(
+        self,
+        num_game,
+        seed,
+        record_dir,
+        eval_mode=True,
+    ):
+        recorder = None if record_dir is None else Recorder(record_dir)
+        ood_states = []
+        ood_actions = []
+        iid_states = []
+        iid_actions = []
+        with torch.no_grad(), utils.eval_mode(self.agent):
+            for episode_idx in tqdm(range(num_game)):
+                step = 0
+                rewards = []
+                states = []
+                actions = []
+                np.random.seed(seed + episode_idx)
+                obs, image_obs = self.train_env.reset()
+                assert image_obs is not None, "image obs is none"
+
+                terminal = False
+                while not terminal:
+                    if recorder is not None:
+                        recorder.add(image_obs)
+                    action = self.agent.act(obs, eval_mode=eval_mode)
+
+                    obs, reward, terminal, _, image_obs = self.train_env.step(action)
+                    states.append(obs["state"])
+                    actions.append(action)
+
+                    rewards.append(reward)
+                    step += 1
+
+                if rewards[-1] <=0:
+                    assert len(states)==len(actions),f'states and actions unaligned'
+                    states_tensor = torch.stack(states[-100:]).to("cuda")
+                    actions_tensor = torch.stack(actions[-100:]).to("cuda")
+                    ood_states.append(states_tensor)
+                    ood_actions.append(actions_tensor)
+                    temp_qs = self.agent.critic(states_tensor,actions_tensor).min(-1)[0]
+                    print(f'fail:\n {temp_qs}')
+                    if recorder is not None:
+                        recorder.save(f"episode{episode_idx}")
+                else:
+                    assert len(states)==len(actions),f'states and actions unaligned'
+                    states_tensor = torch.stack(states[-100:]).to("cuda")
+                    actions_tensor = torch.stack(actions[-100:]).to("cuda")
+                    iid_states.append(states_tensor)
+                    iid_actions.append(actions_tensor)
+                    temp_qs = self.agent.critic(states_tensor,actions_tensor).min(-1)[0]
+                    print(f'succ:\n {temp_qs}')
+                    if recorder is not None:
+                        recorder.empty()
+        
+        # evaluate q values on ood states
+        fail_count = len(ood_actions)
+        suc_count = len(iid_actions)
+        ood_states_tensor = torch.cat(ood_states,dim=0).to("cuda")
+        ood_actions_tensor = torch.cat(ood_actions,dim=0).to("cuda")
+        iid_states_tensor = torch.cat(iid_states,dim=0).to("cuda")
+        iid_actions_tensor = torch.cat(iid_actions,dim=0).to("cuda")
+
+        with torch.no_grad():
+            ood_q = self.agent.critic(ood_states_tensor,ood_actions_tensor).min(-1)[0].mean()
+            iid_q = self.agent.critic(iid_states_tensor,iid_actions_tensor).min(-1)[0].mean()
+            off_batch = self.off_batch
+            off_q = self.agent.critic(off_batch.obs["state"],off_batch.action["action"]).min(-1)[0].mean()
+        
+        print(f'fail:{fail_count},suc:{suc_count}\n ood q: {ood_q}, iid q:{iid_q},off_q: {off_q}')
+
+        return
 
 def load_model(weight_file, device):
     cfg_path = os.path.join(os.path.dirname(weight_file), f"cfg.yaml")
@@ -628,6 +703,8 @@ def build_agent(use_state, obs_shape, prop_shape, action_dim, rl_camera: str, cf
     if cfg.act_method == "pessorl":
         return pessorlAgent(use_state,obs_shape,prop_shape,action_dim,rl_camera,cfg,
                             'release/model/robomimic/square_worldmodels/model0.pth')
+    if cfg.act_method == "sac":
+        return sacAgent(use_state,obs_shape,prop_shape,action_dim,rl_camera,cfg)
     else:
         assert False, f"Unknown rl type {cfg.act_method}."
 

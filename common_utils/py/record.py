@@ -28,6 +28,9 @@ class Recorder:
         combined = np.concatenate(combined, axis=1)
         self.combined_frames.append(combined)
 
+    def empty(self):
+        self.combined_frames.clear()
+
     def save(self, name):
         path = os.path.join(self.save_dir, f"{name}.mp4")
         print(f"saving video to {path}")

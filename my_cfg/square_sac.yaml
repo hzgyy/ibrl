@@ -5,29 +5,32 @@ stddev_max: 0.1
 use_state: 1
 state_stack: 3
 # bc_policy: "release/model/robomimic/square_state/model0.pt"
-#load_pretrained_agent: "release/model/robomimic/square_pretrain_awac5/model0.pt"
+# load_pretrained_agent: "release/model/robomimic/square_pretrain_awac50/model0.pt"
+# load_ref_agent: "release/model/robomimic/square_pretrain_awac5/model0.pt"
+# load_pretrained_agent: "exps/compare/square_exp5_set7_ibrl_testerror/model0.pt"
 load_policy_only: 0
-pretrain_num_epoch: 25
 preload_num_data: 50
 preload_datapath: "release/data/robomimic/square/processed_data96.hdf5"
+mix_rl_rate: 0.5
 num_warm_up_episode: 0
 num_train_step: 300000
-replay_buffer_size: 1000
-use_wb: 0
+replay_buffer_size: 10000
+use_wb: 1
 # inril: 0
 mp_eval: 0
 log_per_step: 10000
-num_eval_episode: 20
+num_eval_episode: 10
 num_critic_update: 5
 q_agent:
-  act_method: "awac"
-  awac_beta: 0.3
+  rand_actor: True
+  act_method: "sac"
+  sac_alpha: 0.1
   state_critic:
-    num_q: 5
+    num_q: 2
     layer_norm: 1
     hidden_dim: 1024
   state_actor:
     dropout: 0.5
     hidden_dim: 1024
-save_dir: "release/model/robomimic/square_pretrain_awac25_newsetting"
-# record_dir: "video/square_exp5_set7_ibrl_testerror"
+save_dir: "exps/compare/square_exp910_hypersac"
+# record_dir: "video/square_offpolicy_od"
