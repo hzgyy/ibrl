@@ -1,0 +1,15 @@
+dataset: 
+  path: "release/data/metaworld/Assembly_frame_stack_1_96x96_end_on_success/dataset.hdf5"
+  rl_camera: ""
+seed: 1
+load_model: "none"
+num_epoch: 2
+epoch_len: 10000
+batchsize: 256
+lr: 1e-4
+grad_clip: 5
+weight_decay: 0
+ema: -1
+# log
+use_wb: 0
+save_dir: "release/model/metaworld/assembly_poor"

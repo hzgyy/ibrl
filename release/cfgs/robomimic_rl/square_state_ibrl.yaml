@@ -1,18 +1,18 @@
-task_name: "NutAssemblySquare"
+task_name: "TwoArmTransport"
 episode_length: 300
 stddev_max: 0.1
 use_state: 1
 state_stack: 3
-bc_policy: "release/model/robomimic/square_state/model0.pt"
+bc_policy: "release/model/robomimic/transport_state_traj50/model0.pt"
 preload_num_data: 50
-preload_datapath: "release/data/robomimic/square/processed_data96.hdf5"
-num_warm_up_episode: 50
-num_train_step: 300000
+preload_datapath: "release/data/robomimic/transport_low_dim/ph/low_dim_v15.hdf5"
+num_warm_up_episode: 0
+num_train_step: 500000
 replay_buffer_size: 1000
-use_wb: 1
+use_wb: 0
 mp_eval: 1
-log_per_step: 10000
-num_eval_episode: 50
+log_per_step: 5
+num_eval_episode: 20
 num_critic_update: 5
 q_agent:
   act_method: "ibrl_soft"
@@ -23,3 +23,4 @@ q_agent:
   state_actor:
     dropout: 0.5
     hidden_dim: 1024
+save_dir: exps/compare/transport_exp1_ibrl

@@ -6,12 +6,12 @@ stddev_max: 0.1
 mix_rl_rate: 0.5
 preload_num_data: 50
 preload_datapath: "release/data/robomimic/square/processed_data96.hdf5"
-num_warm_up_episode: 50
+num_warm_up_episode: 0
 num_train_step: 500000
 replay_buffer_size: 1000
 use_wb: 1
-mp_eval: 1
-num_eval_episode: 50
+mp_eval: 0
+num_eval_episode: 20
 use_state: 0
 log_per_step: 10000
 q_agent:
@@ -26,3 +26,4 @@ q_agent:
   critic:
     spatial_emb: 1024
     hidden_dim: 1024
+save_dir: "exps/compare_pixel/square_exp1_rlpd_od50"

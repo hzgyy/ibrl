@@ -1,23 +1,22 @@
-task_name: "NutAssemblySquare"
+task_name: "TwoArmTransport"
 rl_camera: "agentview+robot0_eye_in_hand"
-episode_length: 300
+episode_length: 750
 stddev_max: 0.1
 use_state: 1
 state_stack: 3
-bc_policy: release/model/robomimic/square_state_overfit/model0.pt
+bc_policy: "release/model/robomimic/transport_state_traj200/model0.pt"
 # load_pretrained_agent: "release/model/robomimic/square_state_pretrain50/model0.pt"
 # load_ref_agent: "release/model/robomimic/square_state_pretrain50/model0.pt"
 load_policy_only: 1
-preload_num_data: 3
-preload_datapath: "release/data/robomimic/square/processed_data96.hdf5"
-# preload_datapath: "release/data/robomimic/square_low_dim/ph/low_dim_v141.hdf5"
-num_warm_up_episode: 0
-num_train_step: 2000000
+preload_num_data: 50
+preload_datapath: "release/data/robomimic/transport_low_dim/ph/low_dim_v15.hdf5"
+num_warm_up_episode: 10
+num_train_step: 300000
 replay_buffer_size: 1000
 use_wb: 1
 # inril: 0
 mp_eval: 0
-log_per_step: 50000
+log_per_step: 10000
 num_eval_episode: 20
 num_critic_update: 5
 q_agent:
@@ -29,5 +28,5 @@ q_agent:
   state_actor:
     dropout: 0.5
     hidden_dim: 1024
-save_dir: "exps/compare/square_exp911_ibrlsoft_overfit_longtest"
+save_dir: exps/compare/transport_exp1_ibrl
 # record_dir: "video/square_exp6_ibrl"

@@ -53,6 +53,12 @@ class QAgentConfig:
     cql_weight: float = 1.0
     min_q_weight: float = 1.0
     target_q_gap: float = 5.0
+    #dgn
+    shutoff_threshold: float = 0.5
+    shutoff_epochs: int = 10
+    dgn_update_freq: int= 1000
+    dgn_batch_size: int = 128
+    dgn_epoch_per_update: int = 2
     def __post_init__(self):
         if self.bootstrap_method == "":
             self.bootstrap_method = self.act_method
@@ -245,12 +251,11 @@ class QAgent(nn.Module,ABC):
     ) -> torch.Tensor:
         actor = self.actor_target if use_target else self.actor
         dist = actor.forward(obs, stddev)
-
         if eval_mode:
             assert not self.training
 
         if eval_mode:
-            action = dist.mean
+            action = dist.mean.detach()
         else:
             action = dist.sample(clip=clip)
 
@@ -258,14 +263,19 @@ class QAgent(nn.Module,ABC):
 
     def compute_critic_loss(
         self,
-        batch,
+        obs: dict[str, torch.Tensor],
+        reply: dict[str, torch.Tensor],
+        reward: torch.Tensor,
+        discount: torch.Tensor,
+        next_obs: dict[str, torch.Tensor],
         stddev: float,
     ) -> Tuple[torch.Tensor, dict]:
-        obs: dict[str, torch.Tensor] = batch.obs
-        reply: dict[str, torch.Tensor] = batch.action
-        reward: torch.Tensor = batch.reward
-        discount: torch.Tensor = batch.bootstrap
-        next_obs: dict[str, torch.Tensor] = batch.next_obs
+        # obs: dict[str, torch.Tensor] = batch.obs
+        # reply: dict[str, torch.Tensor] = batch.action
+        # reward: torch.Tensor = batch.reward
+        # discount: torch.Tensor = batch.bootstrap
+        # next_obs: dict[str, torch.Tensor] = batch.next_obs
+        #assert False,f"{obs.keys(),next_obs.keys()}"
         with torch.no_grad():
             next_action = self.get_action(
                     obs=next_obs,
@@ -306,10 +316,14 @@ class QAgent(nn.Module,ABC):
 
     def update_critic(
         self,
-        batch,
+        obs: dict[str, torch.Tensor],
+        reply: dict[str, torch.Tensor],
+        reward: torch.Tensor,
+        discount: torch.Tensor,
+        next_obs: dict[str, torch.Tensor],
         stddev: float,
     ):
-        critic_loss, metrics = self.compute_critic_loss(batch,stddev)
+        critic_loss, metrics = self.compute_critic_loss(obs,reply,reward,discount,next_obs,stddev)
         if not self.use_state:
             self.encoder_opt.zero_grad(set_to_none=True)
         self.critic_opt.zero_grad(set_to_none=True)
@@ -322,8 +336,8 @@ class QAgent(nn.Module,ABC):
         return metrics
 
     #def compute_actor_loss(self, obs: dict[str, torch.Tensor], stddev: float):
-    def compute_actor_loss(self, batch, stddev: float):
-        obs = batch.obs
+    def compute_actor_loss(self, obs: dict[str, torch.Tensor], stddev: float):
+        #obs = batch.obs
         if not self.use_state:
             assert "feat" in obs, "safety check"
 
@@ -343,14 +357,14 @@ class QAgent(nn.Module,ABC):
 
     def update_actor(
         self, 
-        #obs: dict[str, torch.Tensor], 
-        batch,
+        obs: dict[str, torch.Tensor], 
+        #batch,
         stddev: float,
         bc_batch,
         ref_agent: "QAgent",
     ):
         metrics = {}
-        actor_loss = self.compute_actor_loss(batch, stddev)
+        actor_loss = self.compute_actor_loss(obs, stddev)
         metrics["train/actor_loss"] = actor_loss.detach().item()
 
         self.actor_opt.zero_grad(set_to_none=True)
@@ -368,6 +382,7 @@ class QAgent(nn.Module,ABC):
         ref_agent: Optional["QAgent"] = None,
     ):
         obs: dict[str, torch.Tensor] = batch.obs
+        reply: dict[str, torch.Tensor] = batch.action
         reward: torch.Tensor = batch.reward
         discount: torch.Tensor = batch.bootstrap
         next_obs: dict[str, torch.Tensor] = batch.next_obs
@@ -376,10 +391,10 @@ class QAgent(nn.Module,ABC):
             obs["feat"] = self._encode(obs, augment=True)
             with torch.no_grad():
                 next_obs["feat"] = self._encode(next_obs, augment=True)
-
+        
         metrics = {}
         metrics["data/batch_R"] = reward.mean().item()
-        critic_metric = self.update_critic(batch,stddev)
+        critic_metric = self.update_critic(obs,reply,reward,discount,next_obs,stddev)
         utils.soft_update_params(self.critic, self.critic_target, self.cfg.critic_target_tau)
         metrics.update(critic_metric)
 
@@ -395,7 +410,7 @@ class QAgent(nn.Module,ABC):
         # else:
         #     assert ref_agent is not None
         #     actor_metric = self.update_actor_rft(obs, stddev, bc_batch, ref_agent)
-        actor_metric = self.update_actor(batch,stddev,bc_batch,ref_agent)
+        actor_metric = self.update_actor(obs,stddev,bc_batch,ref_agent)
 
         utils.soft_update_params(self.actor, self.actor_target, self.cfg.critic_target_tau)
         metrics.update(actor_metric)

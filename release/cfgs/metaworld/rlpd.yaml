@@ -1,6 +1,6 @@
 episode_length: 100
 stddev_max: 0.1
-bc_policy: "assembly"
+bc_policy: "coffeepush"
 preload_num_data: 3
 env_reward_scale: 1
 use_bc: 0
@@ -18,3 +18,4 @@ q_agent:
     feature_dim: 64
   critic:
     feature_dim: 64
+save_dir: "exps/meta_compare/coffeepush_exp1_rlpd"

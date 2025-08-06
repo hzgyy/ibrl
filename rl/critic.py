@@ -93,6 +93,37 @@ class Critic(nn.Module):
         q2 = self.q2(feat, prop, action)
         return q1, q2
 
+class Discriminator(nn.Module):
+    def __init__(self, repr_dim, patch_repr_dim, prop_dim, action_dim, cfg: CriticConfig):
+        super().__init__()
+        self.cfg = cfg
+        if cfg.spatial_emb:
+            q_cons = lambda: SpatialEmbQNet(
+                fuse_patch=cfg.fuse_patch,
+                num_patch=repr_dim // patch_repr_dim,
+                patch_dim=patch_repr_dim,
+                emb_dim=cfg.spatial_emb,
+                prop_dim=prop_dim,
+                action_dim=action_dim,
+                hidden_dim=self.cfg.hidden_dim,
+                orth=self.cfg.orth,
+            )
+        else:
+            q_cons = lambda: _QNet(
+                repr_dim=repr_dim,
+                prop_dim=prop_dim,
+                action_dim=action_dim,
+                feature_dim=self.cfg.feature_dim,
+                hidden_dim=self.cfg.hidden_dim,
+                orth=self.cfg.orth,
+                drop=self.cfg.drop,
+            )
+        self.net = q_cons()
+
+    def forward(self, feat, prop, action) -> tuple[torch.Tensor, torch.Tensor]:
+        # assert self.training
+        d = self.net(feat,prop,action)
+        return d
 
 class SpatialEmbQNet(nn.Module):
     def __init__(

@@ -7,6 +7,8 @@ from typing import Optional
 import pyrallis
 import torch
 import numpy as np
+from collections import deque
+from tqdm import tqdm
 
 import common_utils
 from common_utils import ibrl_utils as utils
@@ -14,7 +16,7 @@ from evaluate import run_eval, run_eval_mp, eval_kl
 from env.robosuite_wrapper import PixelRobosuite
 from rl.q_agent import QAgent, QAgentConfig
 from rl import replay
-from rl import rftAgent,ibrlAgent,ibrlsoftAgent,awacAgent,cqlAgent,testAgent
+from rl import rftAgent,ibrlAgent,ibrlsoftAgent,awacAgent,cqlAgent,testAgent,dgnAgent
 import train_bc
 
 
@@ -294,8 +296,6 @@ class Workspace:
             reward_scale=self.cfg.env_reward_scale,
             record_sim_state=bool(self.cfg.save_per_success > 0),
         )
-        # batch = self.replay.sample(1, "cuda:0")
-        # assert False, f'{batch.obs}'
 
     def eval(self, seed, policy,steps = 0) -> float:
         random_state = np.random.get_state()
@@ -375,9 +375,12 @@ class Workspace:
         )
         self.agent.set_stats(stat)
         saver = common_utils.TopkSaver(save_dir=self.work_dir, topk=1)
+        shutoff_recorder = deque(maxlen=self.cfg.q_agent.shutoff_epochs)
 
         if self.replay.num_episode < self.cfg.num_warm_up_episode:
             self.warm_up()
+        # dgn net warm up
+        self.dgn_train()
 
         stopwatch = common_utils.Stopwatch()
         self.log_and_save(stopwatch, stat, saver)
@@ -387,7 +390,12 @@ class Workspace:
             ### act ###
             with stopwatch.time("act"), torch.no_grad(), utils.eval_mode(self.agent):
                 stddev = utils.schedule(self.cfg.stddev_schedule, self.global_step)
-                action = self.agent.act(obs, eval_mode=False, stddev=stddev)
+                # add explore with dgn
+                shutoff_suc_rate = sum(shutoff_recorder)/len(shutoff_recorder) if len(shutoff_recorder)>0 else 0
+                if shutoff_suc_rate > self.cfg.q_agent.shutoff_threshold:
+                    action = self.agent.act(obs, eval_mode=True, stddev=stddev)
+                else:
+                    action = self.agent.act(obs, eval_mode=False, stddev=stddev)
                 stat["data/stddev"].append(stddev)
 
             ### env.step ###
@@ -409,6 +417,8 @@ class Workspace:
                     # reset env
                     obs, _ = self.train_env.reset()
                     self.replay.new_episode(obs)
+                    # record dgn_recorder
+                    shutoff_recorder.append(float(success))
 
             ### logging ###
             if self.global_step % self.cfg.log_per_step == 0:
@@ -419,6 +429,12 @@ class Workspace:
                 with stopwatch.time("train"):
                     self.rl_train(stat)
                     self.train_step += 1
+            
+            # update dgn
+            if self.global_step % self.cfg.q_agent.dgn_update_freq == 0:
+                with stopwatch.time("dgn train"):
+                    self.dgn_train()
+
 
     def log_and_save(
         self,
@@ -443,14 +459,14 @@ class Workspace:
             stat["eval/seed"].append(eval_seed)
             eval_score = self.eval(seed=eval_seed, policy=self.agent,steps = self.global_step)
             stat["score/score"].append(eval_score)
-            # mix_kl,off_kl,mix_q,off_q,off_q_consis,delta_q,pred_var = self.calculate_metric()
-            # stat["score/mix_kl"].append(mix_kl)
-            # stat["score/off_kl"].append(off_kl)
-            # stat["score/mix_q"].append(mix_q)
-            # stat["score/off_q"].append(off_q)
-            # stat["score/off_q_consis"].append(off_q_consis)
-            # stat["score/delta_q"].append(delta_q)
-            # stat["score/pred_var"].append(pred_var)
+            mix_kl,off_kl,mix_q,off_q,off_q_consis,delta_q,pred_var = self.calculate_metric()
+            stat["score/mix_kl"].append(mix_kl)
+            stat["score/off_kl"].append(off_kl)
+            stat["score/mix_q"].append(mix_q)
+            stat["score/off_q"].append(off_q)
+            stat["score/off_q_consis"].append(off_q_consis)
+            stat["score/delta_q"].append(delta_q)
+            stat["score/pred_var"].append(pred_var)
             original_act_method = self.agent.cfg.act_method
             # if self.agent.cfg.act_method != "rl":
             #     with self.agent.override_act_method("rl"):
@@ -493,6 +509,18 @@ class Workspace:
             metrics = self.agent.update(batch, stddev, update_actor, bc_batch, self.ref_agent)
             stat.append(metrics)
             stat["data/discount"].append(batch.bootstrap.mean().item())
+    
+    def dgn_train(self):
+        total_times = int(self.cfg.preload_num_data * 200/self.cfg.q_agent.dgn_batch_size)
+        for epoch in range(self.cfg.q_agent.dgn_epoch_per_update):
+            rec_loss = []
+            for i in tqdm(range(total_times)):
+                batch = self.replay.sample_bc(self.cfg.q_agent.dgn_batch_size,"cuda")
+                loss = self.agent.update_dgn_net(batch)
+                if i % 10:
+                    rec_loss.append(loss)
+            print(rec_loss)
+        return      
 
     def pretrain_policy(self):
         stat = common_utils.MultiCounter(
@@ -605,6 +633,8 @@ def build_agent(use_state, obs_shape, prop_shape, action_dim, rl_camera: str, cf
         return cqlAgent(use_state,obs_shape,prop_shape,action_dim,rl_camera,cfg)
     if cfg.act_method == "test":
         return testAgent(use_state,obs_shape,prop_shape,action_dim,rl_camera,cfg)
+    if cfg.act_method == "dgn":
+        return dgnAgent(use_state,obs_shape,prop_shape,action_dim,rl_camera,cfg)
     else:
         assert False, f"Unknown rl type {cfg.act_method}."
 

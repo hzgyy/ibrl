@@ -1,9 +1,10 @@
 dataset:
   path: release/data/robomimic/square/processed_data96.hdf5
   rl_camera: agentview
-  num_data: 50
+  num_data: 5
   prop_stack: 3
 policy:
   use_prop: 1
-use_wb: 1
+use_wb: 0
 num_epoch: 20
+save_dir: release/model/robomimic/square_pixel_bc_od5

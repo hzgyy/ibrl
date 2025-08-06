@@ -1,8 +1,9 @@
 episode_length: 100
 stddev_max: 0.1
-bc_policy: "assembly"
+bc_policy: "coffeepush"
 preload_num_data: 3
 env_reward_scale: 1
+# bc_policy: "release/model/metaworld/pathAssembly_num_data3_num_epoch2_seed1/model1.pt"
 num_train_step: 100000
 replay_buffer_size: 500
 use_wb: 1
@@ -16,3 +17,4 @@ q_agent:
     feature_dim: 64
   critic:
     feature_dim: 64
+save_dir: "exps/meta_compare/coffeepush_exp1_ibrl"

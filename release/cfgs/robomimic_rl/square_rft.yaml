@@ -1,5 +1,5 @@
 task_name: "NutAssemblySquare"
-rl_camera: "agentview"
+rl_camera: "robot0_eye_in_hand"
 prop_stack: 3
 episode_length: 300
 stddev_max: 0.1

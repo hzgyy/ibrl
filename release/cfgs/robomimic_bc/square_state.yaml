@@ -1,12 +1,15 @@
 dataset:
-  path: release/data/robomimic/square/processed_data96.hdf5
-  num_data: 50
+  path: "release/data/robomimic/square/processed_data96.hdf5"
+  num_data: 2
   use_state: 1
   state_stack: 3
+  eval_episode_len: 300
 state_policy:
   hidden_dim: 1024
   dropout: 0.5
   num_layer: 3
-use_wb: 1
-num_epoch: 20
+use_wb: 0
+num_epoch: 10
+num_eval_episode: 1
 grad_clip: 100
+save_dir: release/model/robomimic/square_state_overfit

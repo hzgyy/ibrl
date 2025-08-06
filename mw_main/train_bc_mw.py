@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 import os
 import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import pprint
 from collections import namedtuple, defaultdict
 import json

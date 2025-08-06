@@ -90,7 +90,8 @@ class ibrlAgent(QAgent):
                     self.stats["actor/anorm_rl"].append(rl_action_norm)
                     self.stats["actor/anorm_bc"].append(bc_action_norm)
                     self.stats["actor/bc_train"].append(use_bc, bsize)
-                    self.stats["actor/greedy_index"].append(greedy_action_idx.mean())
+                    # self.stats["actor/greedy_index"].append(greedy_action_idx.mean())
+                    self.stats["actor/greedy_index"].append(greedy_action_idx)
 
         return action
     
@@ -159,9 +160,14 @@ class ibrlsoftAgent(QAgent):
             else:
                 if eval_mode:
                     self.stats["actor/bc_eval"].append(use_bc, bsize)
+                    #calculate the difference in rl and bc policy
+                    act_diff = (rl_action-bc_action).unsqueeze(0)
+                    act_diff = torch.linalg.vector_norm(act_diff).item()
+                    self.stats["actor/diff_act_eval"].append(act_diff,bsize)
                 else:
                     assert bsize == 1
+                    bc_logp = rl_dist.log_prob(bc_action).sum(-1).item()
+                    self.stats["actor/bc_logp_rl"].append(bc_logp,bsize)
                     self.stats["actor/bc_act"].append(use_bc, bsize)
                     self.stats["actor/qrl-qbc"].append((qa[0][0] - qa[0][1]).item())
-
         return action

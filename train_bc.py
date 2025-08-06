@@ -11,7 +11,7 @@ import common_utils
 from bc.dataset import DatasetConfig, RobomimicDataset
 from bc.bc_policy import StateBcPolicy, StateBcPolicyConfig
 from bc.bc_policy import BcPolicy, BcPolicyConfig
-from evaluate import run_eval_mp
+from evaluate import run_eval_mp,run_eval
 from env.robosuite_wrapper import PixelRobosuite
 
 
@@ -30,7 +30,7 @@ class MainConfig(common_utils.RunConfig):
     grad_clip: float = 5
     weight_decay: float = 0
     # eval
-    num_eval_episode: int = 50
+    num_eval_episode: int = 20
     # to be overwritten by run() to facilitate model loading
     task_name: str = ""
     robots: list[str] = field(default_factory=lambda: [])
@@ -75,6 +75,7 @@ def run(cfg: MainConfig, policy):
     policy = policy.to("cuda")
     print(common_utils.wrap_ruler("policy weights"))
     print(policy)
+    # assert False,f'{next(policy.parameters()).device}'
 
     common_utils.count_parameters(policy)
     if cfg.weight_decay == 0:
@@ -158,8 +159,11 @@ def run(cfg: MainConfig, policy):
 
 
 def evaluate(policy, dataset: RobomimicDataset, seed, num_game):
-    return run_eval_mp(
-        dataset.env_params, policy, num_game=num_game, seed=seed, num_proc=10, verbose=False
+    # return run_eval_mp(
+    #     dataset.env_params, policy, num_game=num_game, seed=seed, num_proc=10, verbose=False
+    # )
+    return run_eval(
+        dataset.env_params, policy, num_game=num_game, seed=seed, verbose=False
     )
 
 

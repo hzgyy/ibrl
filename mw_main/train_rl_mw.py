@@ -1,5 +1,7 @@
 import os
 import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from typing import Any, Optional
 from dataclasses import dataclass, field
 import yaml
@@ -16,6 +18,7 @@ from env.metaworld_wrapper import PixelMetaWorld
 import mw_replay
 import train_bc_mw
 from eval_mw import run_eval
+
 
 
 BC_POLICIES = {
@@ -353,6 +356,29 @@ class Workspace:
             print(f"saved?: {saved}")
             print(common_utils.get_mem_usage())
 
+def load_model(weight_file, device):
+    cfg_path = os.path.join(os.path.dirname(weight_file), f"cfg.yaml")
+    print(common_utils.wrap_ruler("config of loaded agent"))
+    with open(cfg_path, "r") as f:
+        print(f.read(), end="")
+    print(common_utils.wrap_ruler(""))
+
+    cfg = pyrallis.load(MainConfig, open(cfg_path, "r"))  # type: ignore
+    cfg.preload_num_data = 0  # override this to avoid loading data
+    workplace = Workspace(cfg)
+
+    eval_env = workplace.eval_env
+    #eval_env_params = workplace.eval_env_params
+    agent = workplace.agent
+    state_dict = torch.load(weight_file)
+    agent.load_state_dict(state_dict)
+
+    if cfg.bc_policy:
+        bc_policy,_,_ = train_bc_mw.load_model(cfg.bc_policy,device)
+        agent.add_bc_policy(bc_policy)
+
+    agent = agent.to(device)
+    return agent, eval_env
 
 def main(cfg: MainConfig):
     workspace = Workspace(cfg)

@@ -56,7 +56,12 @@ class DatasetConfig:
 
     @cached_property
     def ctrl_delta(self):
-        return self.env_config["env_kwargs"]["controller_configs"]["control_delta"]
+        # assert False, f'{self.env_config["env_kwargs"]["controller_configs"]}'
+        if self.env_config["env_version"] == "1.5.1":
+            return self.env_config["env_kwargs"]["controller_configs"]["body_parts"]["right"]["control_delta"]
+        else:
+            return self.env_config["env_kwargs"]["controller_configs"]["control_delta"]
+        # return True
 
 
 class RobomimicDataset:
@@ -188,13 +193,18 @@ class RobomimicDataset:
 
     def _check_controller_cfg(self):
         assert self.env is not None
-        ref_controller_cfg = self.cfg.env_config["env_kwargs"]["controller_configs"]
+        if self.cfg.env_config["env_version"] == "1.5.1":
+            ref_controller_cfg = self.cfg.env_config["env_kwargs"]["controller_configs"]["body_parts"]["right"]
+            ref_controller_cfg.pop("input_ref_frame")
+            ref_controller_cfg.pop("gripper")
+        else:
+            ref_controller_cfg = self.cfg.env_config["env_kwargs"]["controller_configs"]
         # rename for consistency
         ref_controller_cfg["damping_ratio"] = ref_controller_cfg["damping"]
         ref_controller_cfg["damping_ratio_limits"] = ref_controller_cfg["damping_limits"]
         ref_controller_cfg.pop("damping")
         ref_controller_cfg.pop("damping_limits")
-        assert ref_controller_cfg == self.env.ctrl_config
+        assert ref_controller_cfg == self.env.ctrl_config,f'{ref_controller_cfg}\n{self.env.ctrl_config}'
         assert self.env.env.control_freq == self.cfg.env_config["env_kwargs"]["control_freq"]
 
         print(common_utils.wrap_ruler("config when the data was collected"))
