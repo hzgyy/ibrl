@@ -1,5 +1,5 @@
 task_name: "PickPlaceCan"
-rl_camera: "robot0_eye_in_hand"
+rl_camera: "robot0_eye_in_hand+agentview"
 prop_stack: 3
 episode_length: 200
 stddev_max: 0.1
@@ -9,21 +9,21 @@ preload_datapath: "release/data/robomimic/can_v15/image_v15.hdf5"
 num_warm_up_episode: 0
 num_train_step: 200000
 replay_buffer_size: 1000
-use_wb: 1
+use_wb: 0
 mp_eval: 0
-num_eval_episode: 20
+num_eval_episode: 2
 use_state: 0
 q_agent:
   act_method: "rl"
   use_prop: 1
-  # enc_type: "resnet"
-  vit:
-    embed_style: "embed2"
-    depth: 1
+  enc_type: "resnet96"
+  # vit:
+  #   embed_style: "embed2"
+  #   depth: 1
   actor:
     hidden_dim: 1024
     feature_dim: 128
   critic:
     spatial_emb: 1024
     hidden_dim: 1024
-save_dir: "exps/compare_pixel/can_exp2_rlpd_cama_od2"
+save_dir: "exps/compare_pixel/test"

@@ -11,14 +11,16 @@ class _QNet(nn.Module):
         super().__init__()
         self.feature_dim = feature_dim
 
-        self.obs_proj = nn.Sequential(
-            nn.Linear(repr_dim, feature_dim),
-            nn.Dropout(drop),
-            nn.LayerNorm(feature_dim),
-            nn.ReLU(),
-        )
+        # self.obs_proj = nn.Sequential(
+        #     nn.Linear(repr_dim, feature_dim),
+        #     nn.Dropout(drop),
+        #     nn.LayerNorm(feature_dim),
+        #     nn.ReLU(),
+        # )
 
         self.prop_dim = prop_dim
+        # CHANGE
+        feature_dim = repr_dim
         q_in_dim = feature_dim + action_dim
         if prop_dim > 0:
             q_in_dim += prop_dim
@@ -37,9 +39,10 @@ class _QNet(nn.Module):
             self.apply(utils.orth_weight_init)
 
     def forward(self, feat, prop, action):
-        assert feat.dim() == 3, f"should be [batch, patch, dim], got {feat.size()}"
-        feat = feat.flatten(1, 2)
-        x = self.obs_proj(feat)
+        # assert feat.dim() == 3, f"should be [batch, patch, dim], got {feat.size()}"
+        # feat = feat.flatten(1, 2)
+        # x = self.obs_proj(feat)
+        x = feat
         if self.prop_dim > 0:
             x = torch.cat([x, action, prop], dim=-1)
         else:

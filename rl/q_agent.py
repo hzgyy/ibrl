@@ -13,7 +13,7 @@ from networks.encoder import VitEncoder, VitEncoderConfig
 from networks.encoder import ResNetEncoder, ResNetEncoderConfig, DrQEncoder
 from networks.encoder import ResNet96Encoder, ResNet96EncoderConfig
 from rl.critic import Critic, CriticConfig
-from rl.actor import Actor, ActorConfig
+from rl.actor import Actor, ActorConfig, SpatialEmb
 from rl.actor import FcActor, FcActorConfig
 from rl.critic import MultiFcQ, MultiFcQConfig
 
@@ -59,6 +59,9 @@ class QAgentConfig:
     dgn_update_freq: int= 1000
     dgn_batch_size: int = 128
     dgn_epoch_per_update: int = 2
+    #vib
+    vib_beta: float = 0.1
+    repr_dim: int = 128
     def __post_init__(self):
         if self.bootstrap_method == "":
             self.bootstrap_method = self.act_method
@@ -66,43 +69,62 @@ class QAgentConfig:
 
 class QAgent(nn.Module,ABC):
     def __init__(
-        self, use_state, obs_shape, prop_shape, action_dim, rl_camera: str, cfg: QAgentConfig
+        self, use_state, obs_shape, prop_shape, action_dim, rl_camera: list[str], cfg: QAgentConfig
     ):
         super().__init__()
         self.use_state = use_state
         self.rl_camera = rl_camera
         self.cfg = cfg
-
+        assert len(self.rl_camera)==2,f'num of rl camera wrong'
+        assert "agentview" in self.rl_camera and "robot0_eye_in_hand" in self.rl_camera,f'rl camera wrong:{self.rl_camera}'
+        self.rl_camera = ["robot0_eye_in_hand","agentview"]
         if use_state:
             self.critic = MultiFcQ(obs_shape, action_dim, cfg.state_critic)
             self.actor = FcActor(obs_shape, action_dim, cfg.state_actor)
         else:
-            self.encoder = self._build_encoders(obs_shape)
-            repr_dim = self.encoder.repr_dim
-            patch_repr_dim = self.encoder.patch_repr_dim
+            self.agentview_encoder = self._build_encoders(obs_shape)
+            self.handview_encoder = self._build_encoders(obs_shape)
+            repr_dim = self.agentview_encoder.repr_dim
+            patch_repr_dim = self.agentview_encoder.patch_repr_dim
             print("encoder output dim: ", repr_dim)
             print("patch output dim: ", patch_repr_dim)
 
             assert len(prop_shape) == 1
             prop_dim = prop_shape[0] if cfg.use_prop else 0
-
+            policy_repr_dim = cfg.repr_dim*2
+            self.agentview_compressor = SpatialEmb(num_patch=repr_dim // patch_repr_dim,
+                                     patch_dim=patch_repr_dim,
+                                     prop_dim=0,
+                                     proj_dim=2*cfg.repr_dim,
+                                     dropout=cfg.actor.dropout) #output B
+            self.handview_compressor = SpatialEmb(num_patch=repr_dim // patch_repr_dim,
+                                     patch_dim=patch_repr_dim,
+                                     prop_dim=0,
+                                     proj_dim=cfg.repr_dim,
+                                     dropout=cfg.actor.dropout) #output B
             # create critics & actor
             self.critic = Critic(
-                repr_dim=repr_dim,
+                repr_dim=policy_repr_dim,
                 patch_repr_dim=patch_repr_dim,
                 prop_dim=prop_dim,
                 action_dim=action_dim,
                 cfg=self.cfg.critic,
             )
-            self.actor = Actor(repr_dim, patch_repr_dim, prop_dim, action_dim, cfg.actor)
+            self.actor = Actor(policy_repr_dim, patch_repr_dim, prop_dim, action_dim, cfg.actor)
 
         self.critic_target = copy.deepcopy(self.critic)
         self.actor_target = copy.deepcopy(self.actor)
 
         if not self.use_state:
             print(common_utils.wrap_ruler(f"encoder weights"))
-            print(self.encoder)
-            common_utils.count_parameters(self.encoder)
+            common_utils.count_parameters(self.handview_encoder)
+            common_utils.count_parameters(self.handview_compressor)
+            common_utils.count_parameters(self.agentview_encoder)
+            common_utils.count_parameters(self.agentview_compressor)
+            print(self.agentview_compressor)
+            print(self.handview_compressor)
+            print(self.handview_encoder)
+            print(self.agentview_encoder)
 
         print(common_utils.wrap_ruler("critic weights"))
         print(self.critic)
@@ -114,8 +136,10 @@ class QAgent(nn.Module,ABC):
 
         # optimizers
         if not self.use_state:
-            self.encoder_opt = torch.optim.Adam(self.encoder.parameters(), lr=self.cfg.lr)
-
+            self.agentview_encoder_opt = torch.optim.Adam(list(self.agentview_encoder.parameters())+list(self.agentview_compressor.parameters()),
+                                                 lr=self.cfg.lr)
+            self.handview_encoder_opt = torch.optim.Adam(list(self.handview_encoder.parameters())+list(self.handview_compressor.parameters()),
+                                                 lr=self.cfg.lr)
         self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr=self.cfg.lr)
         self.actor_opt = torch.optim.Adam(self.actor.parameters(), lr=self.cfg.lr)
 
@@ -152,7 +176,10 @@ class QAgent(nn.Module,ABC):
     def train(self, training=True):
         self.training = training
         if not self.use_state:
-            self.encoder.train(training)
+            self.handview_encoder.train(training)
+            self.handview_compressor.train(training)
+            self.agentview_encoder.train(training)
+            self.agentview_compressor.train(training)
         self.actor.train(training)
         self.critic.train(training)
 
@@ -171,12 +198,41 @@ class QAgent(nn.Module,ABC):
         self.cfg.act_method = original_method
         return
 
-    def _encode(self, obs: dict[str, torch.Tensor], augment: bool) -> torch.Tensor:
+    def _encode(self, obs: dict[str, torch.Tensor], augment: bool,need_kl:bool=False) -> torch.Tensor:
         """This function encodes the observation into feature tensor."""
-        data = obs[self.rl_camera].float()
+        #encode handview
+        hand_data = obs["robot0_eye_in_hand"].float()
+        batch_size = hand_data.shape[0]
         if augment:
-            data = self.aug(data)
-        return self.encoder.forward(data, flatten=False)
+            hand_data = self.aug(hand_data)   #B,96,96
+        hand_feat = self.handview_encoder.forward(hand_data, flatten=False)   #B,144,256
+        hand_feat = self.handview_compressor.forward(hand_feat,None)   # B, cfg.repr_dim
+        # synthesize distributions
+        agent_data = obs["agentview"].float()
+        if augment:
+            agent_data = self.aug(agent_data)   #B,96,96
+        agent_feat = self.agentview_encoder.forward(agent_data, flatten=False)   #B,144,256
+        agent_feat = self.agentview_compressor.forward(agent_feat,None)   # B, cfg.repr_dim
+        # print(agent_feat[:,:self.cfg.repr_dim])
+        agent_feat_dis = torch.distributions.Normal(agent_feat[:,:self.cfg.repr_dim],
+                                                    torch.exp(agent_feat[:,self.cfg.repr_dim:])) #B, distri
+        sampled_agent_feat = agent_feat_dis.rsample()   #B,cfg.repr_dim
+        assert hand_feat.shape == sampled_agent_feat.shape,f'two view shape wrong:{hand_feat.shape}vs{agent_feat.shape}'
+        # if self.cfg.use_prop:
+        #     prop_feat = obs["prop"]
+        #     assert hand_feat.shape[0] == prop_feat.shape[0],f'prop and feature shape wrong:{hand_feat.shape}vs{prop_feat.shape}'
+        #     feat_list = [hand_feat,sampled_agent_feat,prop_feat]
+        # else:
+        #     feat_list = [hand_feat,sampled_agent_feat]
+        result = torch.cat([hand_feat,sampled_agent_feat],dim=-1)  #B,2*cfg.repr_dim
+        assert result.shape == (batch_size,2*self.cfg.repr_dim),f'result shape wrong:{result.shape}'
+        if need_kl:
+            prior = torch.distributions.Normal(0, 1)
+            kl = torch.distributions.kl.kl_divergence(agent_feat_dis,prior).sum(-1) #B,1
+            assert kl.shape == (batch_size,),f'kl shape wrong:{kl.shape}'
+            return result,kl
+        else:
+            return result
 
     def _maybe_unsqueeze_(self, obs):
         should_unsqueeze = False
@@ -184,12 +240,13 @@ class QAgent(nn.Module,ABC):
             if obs["state"].dim() == 1:
                 should_unsqueeze = True
         else:
-            if obs[self.rl_camera].dim() == 3:
-                should_unsqueeze = True
+            for camera in self.rl_camera:
+                if obs[camera].dim() == 3:
+                    should_unsqueeze = True
 
         if should_unsqueeze:
             for k, v in obs.items():
-                obs[k] = v.unsqueeze(0)
+                obs[k] = v.unsqueeze(0) #create a batch whose size is 1
         return should_unsqueeze
 
     def act(
@@ -269,6 +326,7 @@ class QAgent(nn.Module,ABC):
         discount: torch.Tensor,
         next_obs: dict[str, torch.Tensor],
         stddev: float,
+        kl: torch.Tensor,
     ) -> Tuple[torch.Tensor, dict]:
         # obs: dict[str, torch.Tensor] = batch.obs
         # reply: dict[str, torch.Tensor] = batch.action
@@ -298,7 +356,7 @@ class QAgent(nn.Module,ABC):
         loss_fn = nn.functional.mse_loss
         if isinstance(self.critic, Critic):
             q1, q2 = self.critic.forward(obs["feat"], obs["prop"], action)
-            critic_loss = loss_fn(q1, target_q) + loss_fn(q2, target_q)
+            critic_loss = loss_fn(q1, target_q) + loss_fn(q2, target_q) + self.cfg.vib_beta*kl.mean()
         else:
             # change to forward k， in order to update q nets on different batch
             #qs: torch.Tensor = self.critic.forward(obs["state"], action)
@@ -322,16 +380,19 @@ class QAgent(nn.Module,ABC):
         discount: torch.Tensor,
         next_obs: dict[str, torch.Tensor],
         stddev: float,
+        kl:torch.Tensor,
     ):
-        critic_loss, metrics = self.compute_critic_loss(obs,reply,reward,discount,next_obs,stddev)
+        critic_loss, metrics = self.compute_critic_loss(obs,reply,reward,discount,next_obs,stddev,kl)
         if not self.use_state:
-            self.encoder_opt.zero_grad(set_to_none=True)
+            self.agentview_encoder_opt.zero_grad(set_to_none=True)
+            self.handview_encoder_opt.zero_grad(set_to_none=True)
         self.critic_opt.zero_grad(set_to_none=True)
 
         critic_loss.backward(retain_graph=True)
 
         if not self.use_state:
-            self.encoder_opt.step()
+            self.agentview_encoder_opt.step()
+            self.handview_encoder_opt.step()
         self.critic_opt.step()
         return metrics
 
@@ -388,13 +449,13 @@ class QAgent(nn.Module,ABC):
         next_obs: dict[str, torch.Tensor] = batch.next_obs
 
         if not self.use_state:
-            obs["feat"] = self._encode(obs, augment=True)
+            obs["feat"],kl = self._encode(obs, augment=True,need_kl=True)
             with torch.no_grad():
                 next_obs["feat"] = self._encode(next_obs, augment=True)
         
         metrics = {}
         metrics["data/batch_R"] = reward.mean().item()
-        critic_metric = self.update_critic(obs,reply,reward,discount,next_obs,stddev)
+        critic_metric = self.update_critic(obs,reply,reward,discount,next_obs,stddev,kl)
         utils.soft_update_params(self.critic, self.critic_target, self.cfg.critic_target_tau)
         metrics.update(critic_metric)
 

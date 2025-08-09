@@ -10,7 +10,7 @@ from rl.q_agent import QAgent,QAgentConfig
 from rl.critic import Critic, CriticConfig
 
 class cqlAgent(QAgent):
-    def __init__(self, use_state, obs_shape, prop_shape, action_dim, rl_camera: str, cfg: QAgentConfig):
+    def __init__(self, use_state, obs_shape, prop_shape, action_dim, rl_camera: list[str], cfg: QAgentConfig):
         self._num_batch_step = 1
         self.bc_start_steps = 0
         super().__init__(use_state, obs_shape, prop_shape, action_dim, rl_camera, cfg)

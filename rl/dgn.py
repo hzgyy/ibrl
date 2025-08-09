@@ -11,7 +11,7 @@ from rl.critic import Critic, CriticConfig
 
 # class of rft algorithm
 class dgnAgent(QAgent):
-    def __init__(self, use_state, obs_shape, prop_shape, action_dim, rl_camera: str, cfg: QAgentConfig):
+    def __init__(self, use_state, obs_shape, prop_shape, action_dim, rl_camera: list[str], cfg: QAgentConfig):
         super().__init__(use_state, obs_shape, prop_shape, action_dim, rl_camera, cfg)
         self.action_dim = action_dim
         covnet_hidden_size = 128

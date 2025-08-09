@@ -145,7 +145,8 @@ class Workspace:
             self.train_env.observation_shape,
             self.train_env.prop_shape,
             self.train_env.action_dim,
-            self.cfg.rl_camera,
+            # self.cfg.rl_camera,
+            self.rl_cameras,
             cfg.q_agent,
         )
         if not from_main:
@@ -590,7 +591,7 @@ def load_model(weight_file, device):
     agent = agent.to(device)
     return agent, eval_env, eval_env_params
 
-def build_agent(use_state, obs_shape, prop_shape, action_dim, rl_camera: str, cfg: QAgentConfig):
+def build_agent(use_state, obs_shape, prop_shape, action_dim, rl_camera: list, cfg: QAgentConfig):
     if cfg.act_method == "rl":
         return QAgent(use_state,obs_shape,prop_shape,action_dim,rl_camera,cfg)
     if cfg.act_method == "rft":

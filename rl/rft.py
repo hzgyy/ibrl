@@ -11,7 +11,7 @@ from rl.critic import Critic, CriticConfig
 
 # class of rft algorithm
 class rftAgent(QAgent):
-    def __init__(self, use_state, obs_shape, prop_shape, action_dim, rl_camera: str, cfg: QAgentConfig):
+    def __init__(self, use_state, obs_shape, prop_shape, action_dim, rl_camera: list[str], cfg: QAgentConfig):
         super().__init__(use_state, obs_shape, prop_shape, action_dim, rl_camera, cfg)
     
     def update_actor(

@@ -42,7 +42,7 @@ class SpatialEmb(nn.Module):
         )
         self.weight = nn.Parameter(torch.zeros(1, num_proj, proj_dim))
         self.dropout = nn.Dropout(dropout)
-        nn.init.normal_(self.weight)
+        nn.init.normal_(self.weight,mean=0.0, std=0.02)
 
     def extra_repr(self) -> str:
         return f"weight: nn.Parameter ({self.weight.size()})"
@@ -74,25 +74,25 @@ class Actor(nn.Module):
     def __init__(self, repr_dim, patch_repr_dim, prop_dim, action_dim, cfg: ActorConfig):
         super().__init__()
 
-        if cfg.spatial_emb > 0:
-            assert cfg.spatial_emb > 1, "this is the dimension"
-            self.compress = SpatialEmb(
-                num_patch=repr_dim // patch_repr_dim,
-                patch_dim=patch_repr_dim,
-                prop_dim=prop_dim,
-                proj_dim=cfg.spatial_emb,
-                dropout=cfg.dropout,
-            )
-            policy_in_dim = cfg.spatial_emb
-        else:
-            self.compress = nn.Sequential(
-                nn.Linear(repr_dim, cfg.feature_dim),
-                nn.LayerNorm(cfg.feature_dim),
-                nn.Dropout(cfg.dropout),
-                nn.ReLU(),
-            )
-            policy_in_dim = cfg.feature_dim
-
+        # if cfg.spatial_emb > 0:
+        #     assert cfg.spatial_emb > 1, "this is the dimension"
+        #     self.compress = SpatialEmb(
+        #         num_patch=repr_dim // patch_repr_dim,
+        #         patch_dim=patch_repr_dim,
+        #         prop_dim=prop_dim,
+        #         proj_dim=cfg.spatial_emb,
+        #         dropout=cfg.dropout,
+        #     )
+        #     policy_in_dim = cfg.spatial_emb
+        # else:
+        #     self.compress = nn.Sequential(
+        #         nn.Linear(repr_dim, cfg.feature_dim),
+        #         nn.LayerNorm(cfg.feature_dim),
+        #         nn.Dropout(cfg.dropout),
+        #         nn.ReLU(),
+        #     )
+        #     policy_in_dim = cfg.feature_dim
+        policy_in_dim = repr_dim
         self.prop_dim = prop_dim
         self.cfg = cfg
 
@@ -108,16 +108,16 @@ class Actor(nn.Module):
             dropout=cfg.dropout,
         )
         if cfg.orth:
-            self.compress.apply(utils.orth_weight_init)
+            # self.compress.apply(utils.orth_weight_init)
             self.policy.apply(utils.orth_weight_init)
 
     def forward(self, obs: dict[str, torch.Tensor], std: float):
-        if isinstance(self.compress, SpatialEmb):
-            feat = self.compress.forward(obs["feat"], obs["prop"])
-        else:
-            feat = obs["feat"].flatten(1, -1)
-            feat = self.compress(feat)
-
+        # if isinstance(self.compress, SpatialEmb):
+        #     feat = self.compress.forward(obs["feat"], obs["prop"])
+        # else:
+        #     feat = obs["feat"].flatten(1, -1)
+        #     feat = self.compress(feat)
+        feat = obs["feat"]
         all_input = [feat]
         if self.prop_dim > 0:
             prop = obs["prop"]
