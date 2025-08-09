@@ -1,10 +1,10 @@
 dataset:
-  path: release/data/robomimic/square/processed_data96.hdf5
-  rl_camera: agentview
+  path: release/data/robomimic/square_v15/demo_v15.hdf5
+  rl_camera: robot0_eye_in_hand
   num_data: 5
   prop_stack: 3
 policy:
   use_prop: 1
 use_wb: 0
-num_epoch: 20
-save_dir: release/model/robomimic/square_pixel_bc_od5
+num_epoch: 10
+save_dir: release/model/robomimic/square_pixel_bc_od5_handview

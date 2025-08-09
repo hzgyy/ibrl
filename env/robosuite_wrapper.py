@@ -201,7 +201,7 @@ class PixelRobosuite:
                 rl_obs[key] = torch.from_numpy(obs[env_key])
 
         return rl_obs, high_res_images
-
+    
     def reset(self) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
         self.time_step = 0
         self.episode_reward = 0

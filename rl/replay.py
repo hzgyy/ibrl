@@ -8,6 +8,8 @@ import numpy as np
 from env.robosuite_wrapper import DEFAULT_STATE_KEYS, STATE_KEYS, PROP_KEYS
 from common_utils import rela
 from common_utils import ibrl_utils as utils
+#temp
+from common_utils import Recorder
 
 
 class Batch:
@@ -187,6 +189,7 @@ class ReplayBuffer:
         else:
             return self.replay.size()
 
+# import psutil, os
 
 def add_demos_to_replay(
     replay: ReplayBuffer,
@@ -201,6 +204,7 @@ def add_demos_to_replay(
     record_sim_state: bool,
     is_demo: bool = True,
 ):
+    # process = psutil.Process(os.getpid())
     f = h5py.File(data_path)
     num_episode: int = len(list(f["data"].keys()))  # type: ignore
     print(f"loading first {num_data} episodes from {data_path}")
@@ -213,12 +217,13 @@ def add_demos_to_replay(
 
         episode_tag = f"demo_{episode_id}"
         episode = f[f"data/{episode_tag}"]
+        # assert False,episode["obs"].keys()
         actions = np.array(episode["actions"]).astype(np.float32)  # type: ignore
         images = {
             rl_camera: np.array(episode[f"obs/{rl_camera}_image"]) for rl_camera in rl_cameras
         }
         all_actions.append(actions)
-
+        
         robot_locs = []
         if "prop" in episode["obs"]:
             props = episode["obs"]["prop"]
@@ -249,13 +254,22 @@ def add_demos_to_replay(
         episode_len = rewards.shape[0]
         print(f"episode {episode_id} length: {episode_len}")
         past_obses = defaultdict(list)
+        # TEMP add a recorder
+        # recorder = Recorder("video/square_pixel_demo5")
         for i in range(episode_len + 1):
             if i < episode_len:
                 assert obs_stack == 1, "does not support obs stack yet"
                 obs = {
                     rl_camera: torch.from_numpy(images[rl_camera][i]) for rl_camera in rl_cameras
                 }
-
+                #check whether need to change the order
+                for rl_camera in rl_cameras:
+                    if obs[rl_camera].shape[0] != 3:
+                        obs[rl_camera] = obs[rl_camera].permute(2,0,1)
+                # record_obs = obs
+                # for camera,img in record_obs.items():
+                #     record_obs[camera] = img.permute(2, 0, 1)
+                # recorder.add(record_obs)
                 prop = torch.from_numpy(props[i])
                 past_obses["prop"].append(prop)
                 assert len(past_obses["prop"]) == i + 1, f"{len(past_obses['prop'])} vs {i + 1}"
@@ -283,13 +297,15 @@ def add_demos_to_replay(
             reward = float(rewards[action_idx]) * reward_scale
             success = bool(rewards[action_idx] == 1)
             terminal = bool(terminals[action_idx])
-
+            
             replay.add(obs, reply, reward, terminal, success, image_obs={})
 
             if success:
                 assert terminal
             if terminal:
                 break
+        # recorder.save(f"episode{episode_id}")
+        # print(f"Memory used: {process.memory_info().rss / 1024 / 1024:.2f} MB")
 
     print(f"Size of the replay buffer: {replay.size()}, # success: {replay.num_success}")
     if replay.bc_replay is not None:

@@ -381,34 +381,10 @@ class Workspace:
 
         stopwatch = common_utils.Stopwatch()
         self.log_and_save(stopwatch, stat, saver)
-        obs, _ = self.train_env.reset()
-        self.replay.new_episode(obs)
+        
         while self.global_step < self.cfg.num_train_step:
             ### act ###
-            with stopwatch.time("act"), torch.no_grad(), utils.eval_mode(self.agent):
-                stddev = utils.schedule(self.cfg.stddev_schedule, self.global_step)
-                action = self.agent.act(obs, eval_mode=False, stddev=stddev)
-                stat["data/stddev"].append(stddev)
-
-            ### env.step ###
-            with stopwatch.time("env step"):
-                obs, reward, terminal, success, image_obs = self.train_env.step(action)
-
-            with stopwatch.time("add"):
-                assert isinstance(terminal, bool)
-                reply = {"action": action}
-                self.replay.add(obs, reply, reward, terminal, success, image_obs)
-                self.global_step += 1
-
-            if terminal:
-                with stopwatch.time("reset"):
-                    self.global_episode += 1
-                    stat["score/train_score"].append(float(success))
-                    stat["data/episode_len"].append(self.train_env.time_step)
-
-                    # reset env
-                    obs, _ = self.train_env.reset()
-                    self.replay.new_episode(obs)
+            
 
             ### logging ###
             if self.global_step % self.cfg.log_per_step == 0:

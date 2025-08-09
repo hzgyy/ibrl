@@ -148,7 +148,6 @@ class Workspace:
             self.cfg.rl_camera,
             cfg.q_agent,
         )
-
         if not from_main:
             return
 
@@ -272,30 +271,30 @@ class Workspace:
             assert self.cfg.save_per_success <= 0, "cannot save a non-growing replay"
             self.replay.freeze_bc_replay = True
         # add buffer for evaluation
-        self.eval_replay = replay.ReplayBuffer(
-            self.cfg.nstep,
-            self.cfg.discount,
-            frame_stack=1,
-            max_episode_length=self.cfg.episode_length,
-            replay_size=self.cfg.replay_buffer_size,
-            use_bc=False,
-            save_per_success=self.cfg.save_per_success,
-            save_dir=self.cfg.save_dir,
-        )
-        replay.add_demos_to_replay(
-            self.eval_replay,
-            self.cfg.preload_datapath,
-            num_data=50,
-            rl_cameras=self.rl_cameras,
-            use_state=self.cfg.use_state,
-            obs_stack=self.obs_stack,
-            state_stack=self.cfg.state_stack,
-            prop_stack=self.prop_stack,
-            reward_scale=self.cfg.env_reward_scale,
-            record_sim_state=bool(self.cfg.save_per_success > 0),
-        )
+        # self.eval_replay = replay.ReplayBuffer(
+        #     self.cfg.nstep,
+        #     self.cfg.discount,
+        #     frame_stack=1,
+        #     max_episode_length=self.cfg.episode_length,
+        #     replay_size=self.cfg.replay_buffer_size,
+        #     use_bc=False,
+        #     save_per_success=self.cfg.save_per_success,
+        #     save_dir=self.cfg.save_dir,
+        # )
+        # replay.add_demos_to_replay(
+        #     self.eval_replay,
+        #     self.cfg.preload_datapath,
+        #     num_data=10,
+        #     rl_cameras=self.rl_cameras,
+        #     use_state=self.cfg.use_state,
+        #     obs_stack=self.obs_stack,
+        #     state_stack=self.cfg.state_stack,
+        #     prop_stack=self.prop_stack,
+        #     reward_scale=self.cfg.env_reward_scale,
+        #     record_sim_state=bool(self.cfg.save_per_success > 0),
+        # )
         # batch = self.replay.sample(1, "cuda:0")
-        # assert False, f'{batch.obs}'
+        # assert False
 
     def eval(self, seed, policy,steps = 0) -> float:
         random_state = np.random.get_state()
@@ -537,7 +536,8 @@ class Workspace:
         #     batch = self.replay.sample_rl_bc(rl_bsize, bc_bsize, "cuda:0")
         # else:
         mix_batch = self.replay.sample(num_samples, "cuda:0")
-        off_batch = self.eval_replay.sample(num_samples,"cuda:0")
+        # off_batch = self.eval_replay.sample(num_samples,"cuda:0")
+        off_batch = self.replay.sample_bc(num_samples,"cuda:0")
         mix_obs_batch = mix_batch.obs["state"]
         off_obs_batch = off_batch.obs["state"]
         mix_act_batch = mix_batch.action["action"]
